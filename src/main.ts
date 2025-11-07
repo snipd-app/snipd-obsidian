@@ -36,6 +36,7 @@ export default class SnipdPlugin extends Plugin {
   async handleSyncError(msg: string) {
     await this.clearSettingsAfterRun();
     this.notice(msg, true, 4, true);
+    this.clearStatusBarPersistentMessage();
   }
 
   async clearSettingsAfterRun() {
@@ -58,6 +59,7 @@ export default class SnipdPlugin extends Plugin {
     
     await this.clearSettingsAfterRun();
     this.notice("Sync stopped by user", true, 4, true);
+    this.clearStatusBarPersistentMessage();
   }
 
   notice(msg: string, show = false, timeout = 0, forcing: boolean = false) {
@@ -72,6 +74,28 @@ export default class SnipdPlugin extends Plugin {
         new Notice(msg);
       }
     }
+  }
+
+  private setStatusBarPersistentMessage(message: string): void {
+    // @ts-ignore
+    if (this.app.isMobile) {
+      new Notice(message);
+    } else if (this.statusBar) {
+      this.statusBar.setPersistentMessage(message);
+    }
+  }
+
+  private clearStatusBarPersistentMessage(): void {
+    // @ts-ignore
+    if (!this.app.isMobile && this.statusBar) {
+      this.statusBar.clearPersistentMessage();
+    }
+  }
+
+  private clearStatusBarPersistentMessageAfterDelay(delayMs: number): void {
+    setTimeout(() => {
+      this.clearStatusBarPersistentMessage();
+    }, delayMs);
   }
 
   async checkSnipdDirectoryExists(): Promise<boolean> {
@@ -150,6 +174,7 @@ export default class SnipdPlugin extends Plugin {
     }
 
     this.notice("Snipd sync started...", true, 0, true);
+    this.setStatusBarPersistentMessage("Snipd sync in progress...");
   }
 
   private buildMetadataUrl(): string {
@@ -173,6 +198,7 @@ export default class SnipdPlugin extends Plugin {
     let response;
     try {
       debugLog(`Snipd plugin: fetching metadata from ${url}`);
+      this.setStatusBarPersistentMessage("Fetching metadata...");
       response = await fetch(url, {
         method: 'GET',
         headers: {
@@ -184,6 +210,7 @@ export default class SnipdPlugin extends Plugin {
     } catch (e) {
       if (e instanceof Error && e.name === 'AbortError') {
         debugLog("Snipd plugin: fetch aborted by user");
+        this.clearStatusBarPersistentMessage();
         return null;
       }
       console.error("Snipd plugin: fetch failed in syncSnipd: ", e);
@@ -217,6 +244,7 @@ export default class SnipdPlugin extends Plugin {
       debugLog(`Snipd plugin: fetched metadata with ${metadata.episode_batch_count} batches`);
       
       if (metadata.episode_batch_count > 0) {
+        this.setStatusBarPersistentMessage(`Syncing ${metadata.episode_batch_count} batch${metadata.episode_batch_count > 1 ? 'es' : ''}...`);
         await this.fetchAndSaveBaseFile(this.settings.snipdDir);
       }
       
@@ -306,8 +334,8 @@ export default class SnipdPlugin extends Plugin {
     this.settings.current_batch_snip_count = batchSnipCount;
     await this.saveSettings();
     
-    this.notice(`Syncing episode batch ${batchIndex + 1}/${totalBatches}: ${episodeIds.length} episodes`, true, 0, true);
     debugLog(`Snipd plugin: processing batch ${batchIndex + 1}/${totalBatches} with ${episodeIds.length} episodes`);
+    this.setStatusBarPersistentMessage(`Syncing batch ${batchIndex + 1}/${totalBatches} (${episodeIds.length} episodes, ${batchSnipCount} snips)...`);
 
     let response;
     try {
@@ -324,6 +352,7 @@ export default class SnipdPlugin extends Plugin {
     } catch (e) {
       if (e instanceof Error && e.name === 'AbortError') {
         debugLog("Snipd plugin: fetch aborted by user");
+        this.clearStatusBarPersistentMessage();
         return null;
       }
       console.error("Snipd plugin: fetch failed for batch: ", e);
@@ -414,10 +443,12 @@ export default class SnipdPlugin extends Plugin {
     await this.clearSettingsAfterRun();
     
     if (totalEpisodes === 0 && totalSnips === 0) {
-      this.notice(`Snipd sync completed (no new data)`, true, 4, true);
+      this.setStatusBarPersistentMessage("Snipd sync completed (no new data)");
     } else {
-      this.notice(`Snipd sync completed (${totalEpisodes} episodes, ${totalSnips} snips)`, true, 4, true);
+      this.setStatusBarPersistentMessage(`Snipd sync completed (${totalEpisodes} episodes, ${totalSnips} snips)`);
     }
+    
+    this.clearStatusBarPersistentMessageAfterDelay(3000);
   }
 
   async testSyncRandomEpisodes() {
@@ -440,6 +471,7 @@ export default class SnipdPlugin extends Plugin {
     }
 
     this.notice("Test sync started...", true, 0, true);
+    this.setStatusBarPersistentMessage("Test sync in progress...");
 
     const debugFolderPath = this.settings.saveDebugZips ? `snipd_plugin_debug/sync_${Date.now()}` : null;
 
@@ -454,6 +486,7 @@ export default class SnipdPlugin extends Plugin {
     let response;
     try {
       debugLog('Snipd plugin: fetching test metadata');
+      this.setStatusBarPersistentMessage("Fetching test metadata...");
       let url = `${API_BASE_URL}/obsidian/fetch-export-metadata`;
       if (this.settings.onlyEditedSnips) {
         url += '?only_edited_snips=true';
@@ -474,6 +507,7 @@ export default class SnipdPlugin extends Plugin {
         this.settingsTab.display();
       }
       this.notice(errorMsg, true, 4, true);
+      this.clearStatusBarPersistentMessage();
       return;
     }
 
@@ -504,6 +538,7 @@ export default class SnipdPlugin extends Plugin {
         if (this.settingsTab) {
           this.settingsTab.display();
         }
+        this.clearStatusBarPersistentMessage();
         return;
       }
 
@@ -511,6 +546,7 @@ export default class SnipdPlugin extends Plugin {
       const shuffled = [...episodesWithSnips].sort(() => 0.5 - Math.random());
       const selectedEpisodes = shuffled.slice(0, randomCount);
       const episodeIds = selectedEpisodes.map(ep => ep.episode_id);
+      const totalSnips = selectedEpisodes.reduce((sum, ep) => sum + ep.updated_snip_count, 0);
 
       debugLog(`Snipd plugin: selected ${randomCount} random episodes for test sync`);
       debugLog('Snipd plugin: selected episode IDs:', episodeIds);
@@ -519,7 +555,7 @@ export default class SnipdPlugin extends Plugin {
         total_snip_count: ep.total_snip_count,
         updated_snip_count: ep.updated_snip_count
       })));
-      this.notice(`Test syncing ${randomCount} random episodes...`, true, 0, true);
+      this.setStatusBarPersistentMessage(`Test syncing ${randomCount} episodes (${totalSnips} snips)...`);
 
       let exportResponse;
       try {
@@ -555,6 +591,7 @@ export default class SnipdPlugin extends Plugin {
           this.settingsTab.display();
         }
         this.notice(errorMsg, true, 4, true);
+        this.clearStatusBarPersistentMessage();
         return;
       }
 
@@ -591,7 +628,8 @@ export default class SnipdPlugin extends Plugin {
           this.settingsTab.display();
         }
         
-        this.notice(`Test sync completed (${stats.episodeCount} episodes, ${stats.snipCount} snips saved to ${testDir})`, true, 6, true);
+        this.setStatusBarPersistentMessage(`Test sync completed (${stats.episodeCount} episodes, ${stats.snipCount} snips)`);
+        this.clearStatusBarPersistentMessageAfterDelay(3000);
       } else {
         console.error("Snipd plugin: bad response for test export: ", exportResponse);
         const statusCode = exportResponse ? exportResponse.status : "";
@@ -602,6 +640,7 @@ export default class SnipdPlugin extends Plugin {
           this.settingsTab.display();
         }
         this.notice(errorMsg, true, 4, true);
+        this.clearStatusBarPersistentMessage();
       }
     } else {
       console.error("Snipd plugin: bad response in testSyncRandomEpisodes: ", response);
@@ -613,6 +652,7 @@ export default class SnipdPlugin extends Plugin {
         this.settingsTab.display();
       }
       this.notice(errorMsg, true, 4, true);
+      this.clearStatusBarPersistentMessage();
     }
   }
 
@@ -1020,6 +1060,7 @@ class StatusBar {
   private messages: StatusBarMessage[] = [];
   private currentMessage: StatusBarMessage | null = null;
   private lastMessageTimestamp: number | null = null;
+  private persistentMessage: string | null = null;
   private statusBarEl: HTMLElement;
 
   constructor(statusBarEl: HTMLElement) {
@@ -1040,7 +1081,22 @@ class StatusBar {
     this.display();
   }
 
+  setPersistentMessage(message: string) {
+    this.persistentMessage = `Snipd: ${message.slice(0, 100)}`;
+    this.statusBarEl.setText(this.persistentMessage);
+  }
+
+  clearPersistentMessage() {
+    this.persistentMessage = null;
+    this.display();
+  }
+
   display() {
+    if (this.persistentMessage) {
+      this.statusBarEl.setText(this.persistentMessage);
+      return;
+    }
+
     if (this.currentMessage && this.lastMessageTimestamp) {
       const messageAge = Date.now() - this.lastMessageTimestamp;
       if (messageAge >= this.currentMessage.timeout) {
@@ -1063,7 +1119,9 @@ class StatusBar {
   private clearCurrent() {
     this.currentMessage = null;
     this.lastMessageTimestamp = null;
-    this.statusBarEl.setText("");
+    if (!this.persistentMessage) {
+      this.statusBarEl.setText("");
+    }
   }
 }
 
