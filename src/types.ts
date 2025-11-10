@@ -22,12 +22,49 @@ export interface SnipdPluginSettings {
   lastSyncTimestamp: string | null;
   lastSyncEpisodeCount: number;
   lastSyncSnipCount: number;
-  episodeTemplate: string;
-  snipTemplate: string;
-  episodeFileNameTemplate: string;
+  episodeTemplate: string | null;
+  snipTemplate: string | null;
+  episodeFileNameTemplate: string | null;
   saveDebugZips: boolean;
   onlyEditedSnips: boolean;
 }
+
+export const DEFAULT_EPISODE_TEMPLATE = `# {{episode_title}}
+
+{{episode_image}}
+
+## Episode metadata
+- Episode title: {{episode_title}}
+- Show: {{show_title}}
+- Owner / Host: {{show_author}}
+- Guests: {{episode_guests}}
+- Episode publish date: {{episode_publish_date}}
+- Episode AI description: {{episode_ai_description}}
+- Mentioned books: {{episode_books}}
+- Duration: {{episode_duration}}
+- Episode URL: [Open in Snipd]({{episode_url}})
+- Show URL: [Open in Snipd]({{show_url}})
+- Export date: {{episode_export_date}}
+
+{{snips_section}}[[## Snips]]
+
+Created with [Snipd](https://www.snipd.com) | Highlight & Take Notes from Podcasts`;
+
+export const DEFAULT_SNIP_TEMPLATE = `### {{snip_favorite_star}} [{{snip_title}}]({{snip_url}}) {{snip_tags}}
+
+🎧 {{snip_start_time}} - {{snip_end_time}} ({{snip_duration}})
+
+{{snip_note}}
+
+{{snip_quote}}[[#### 💬 Quote]]
+
+{{snip_transcript}}[[#### 📚 Transcript]]
+
+---
+
+`;
+
+export const DEFAULT_EPISODE_FILE_NAME_TEMPLATE = `{{episode_title}}`;
 
 export const DEFAULT_SETTINGS: SnipdPluginSettings = {
   apiKey: "",
@@ -55,40 +92,9 @@ export const DEFAULT_SETTINGS: SnipdPluginSettings = {
   lastSyncSnipCount: 0,
   saveDebugZips: false,
   onlyEditedSnips: false,
-  episodeTemplate: `# {{episode_title}}
-
-{{episode_image}}
-
-## Episode metadata
-- Episode title: {{episode_title}}
-- Show: {{show_title}}
-- Owner / Host: {{show_author}}
-- Guests: {{episode_guests}}
-- Episode publish date: {{episode_publish_date}}
-- Episode AI description: {{episode_ai_description}}
-- Mentioned books: {{episode_books}}
-- Duration: {{episode_duration}}
-- Episode URL: [Open in Snipd]({{episode_url}})
-- Show URL: [Open in Snipd]({{show_url}})
-- Export date: {{episode_export_date}}
-
-{{snips_section}}[[## Snips]]
-
-Created with [Snipd](https://www.snipd.com) | Highlight & Take Notes from Podcasts`,
-  snipTemplate: `### {{snip_favorite_star}} [{{snip_title}}]({{snip_url}}) {{snip_tags}}
-
-🎧 {{snip_start_time}} - {{snip_end_time}} ({{snip_duration}})
-
-{{snip_note}}
-
-{{snip_quote}}[[#### 💬 Quote]]
-
-{{snip_transcript}}[[#### 📚 Transcript]]
-
----
-
-`,
-  episodeFileNameTemplate: `{{episode_title}}`,
+  episodeTemplate: null,
+  snipTemplate: null,
+  episodeFileNameTemplate: null,
 };
 
 export interface MetadataJson {

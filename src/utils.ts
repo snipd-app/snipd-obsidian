@@ -1,5 +1,5 @@
 import { DataAdapter } from 'obsidian';
-import { EpisodeEntityData, SnipdPluginSettings } from './types';
+import { EpisodeEntityData, SnipdPluginSettings, DEFAULT_EPISODE_FILE_NAME_TEMPLATE } from './types';
 import { sanitizeFileName } from './sanitize_file_name';
 
 export const isDev = () => {
@@ -22,7 +22,7 @@ export function generateEpisodeFileName(
     return sanitizeFileName(episodeId);
   }
 
-  let template = settings.episodeFileNameTemplate;
+  let template = settings.episodeFileNameTemplate ?? DEFAULT_EPISODE_FILE_NAME_TEMPLATE;
   
   const variables: Record<string, string> = {
     'episode_title': episodeData.episode_name || '',

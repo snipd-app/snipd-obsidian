@@ -12,6 +12,8 @@ import { Md5 } from "ts-md5";
 import { 
   SnipdPluginSettings, 
   DEFAULT_SETTINGS,
+  DEFAULT_EPISODE_TEMPLATE,
+  DEFAULT_SNIP_TEMPLATE,
   MetadataJson,
   EpisodeSnipMetadata,
   FetchExportMetadataResponse
@@ -296,8 +298,8 @@ export default class SnipdPlugin extends Plugin {
       only_edited_snips?: boolean;
     } = {
       episode_ids: episodeIds,
-      episode_template: this.settings.episodeTemplate,
-      snip_template: this.settings.snipTemplate,
+      episode_template: this.settings.episodeTemplate ?? DEFAULT_EPISODE_TEMPLATE,
+      snip_template: this.settings.snipTemplate ?? DEFAULT_SNIP_TEMPLATE,
     };
     
     if (this.settings.last_updated_after) {
@@ -566,8 +568,8 @@ export default class SnipdPlugin extends Plugin {
           only_edited_snips?: boolean;
         } = {
           episode_ids: episodeIds,
-          episode_template: this.settings.episodeTemplate,
-          snip_template: this.settings.snipTemplate,
+          episode_template: this.settings.episodeTemplate ?? DEFAULT_EPISODE_TEMPLATE,
+          snip_template: this.settings.snipTemplate ?? DEFAULT_SNIP_TEMPLATE,
         };
         
         if (this.settings.onlyEditedSnips) {

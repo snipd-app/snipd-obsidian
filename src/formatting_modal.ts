@@ -1,6 +1,6 @@
 import { App, Modal, Notice } from 'obsidian';
 import type SnipdPlugin from './main';
-import { DEFAULT_SETTINGS } from './types';
+import { DEFAULT_EPISODE_TEMPLATE, DEFAULT_SNIP_TEMPLATE, DEFAULT_EPISODE_FILE_NAME_TEMPLATE } from './types';
 
 export class FormattingConfigModal extends Modal {
   plugin: SnipdPlugin;
@@ -13,9 +13,9 @@ export class FormattingConfigModal extends Modal {
     super(app);
     this.plugin = plugin;
     this.onSave = onSave;
-    this.tempEpisodeTemplate = plugin.settings.episodeTemplate;
-    this.tempSnipTemplate = plugin.settings.snipTemplate;
-    this.tempEpisodeFileNameTemplate = plugin.settings.episodeFileNameTemplate;
+    this.tempEpisodeTemplate = plugin.settings.episodeTemplate ?? DEFAULT_EPISODE_TEMPLATE;
+    this.tempSnipTemplate = plugin.settings.snipTemplate ?? DEFAULT_SNIP_TEMPLATE;
+    this.tempEpisodeFileNameTemplate = plugin.settings.episodeFileNameTemplate ?? DEFAULT_EPISODE_FILE_NAME_TEMPLATE;
   }
 
   onOpen() {
@@ -174,9 +174,9 @@ export class FormattingConfigModal extends Modal {
 
     const resetButton = buttonContainer.createEl('button', { text: 'Reset to default' });
     resetButton.addEventListener('click', () => {
-      this.tempEpisodeFileNameTemplate = DEFAULT_SETTINGS.episodeFileNameTemplate;
-      this.tempEpisodeTemplate = DEFAULT_SETTINGS.episodeTemplate;
-      this.tempSnipTemplate = DEFAULT_SETTINGS.snipTemplate;
+      this.tempEpisodeFileNameTemplate = DEFAULT_EPISODE_FILE_NAME_TEMPLATE;
+      this.tempEpisodeTemplate = DEFAULT_EPISODE_TEMPLATE;
+      this.tempSnipTemplate = DEFAULT_SNIP_TEMPLATE;
       fileNameInput.value = this.tempEpisodeFileNameTemplate;
       episodeTextarea.value = this.tempEpisodeTemplate;
       snipTextarea.value = this.tempSnipTemplate;
@@ -192,9 +192,18 @@ export class FormattingConfigModal extends Modal {
       cls: 'mod-cta'
     });
     saveButton.addEventListener('click', async () => {
-      this.plugin.settings.episodeFileNameTemplate = this.tempEpisodeFileNameTemplate;
-      this.plugin.settings.episodeTemplate = this.tempEpisodeTemplate;
-      this.plugin.settings.snipTemplate = this.tempSnipTemplate;
+      this.plugin.settings.episodeFileNameTemplate = 
+        this.tempEpisodeFileNameTemplate === DEFAULT_EPISODE_FILE_NAME_TEMPLATE
+          ? null
+          : this.tempEpisodeFileNameTemplate;
+      this.plugin.settings.episodeTemplate = 
+        this.tempEpisodeTemplate === DEFAULT_EPISODE_TEMPLATE
+          ? null
+          : this.tempEpisodeTemplate;
+      this.plugin.settings.snipTemplate = 
+        this.tempSnipTemplate === DEFAULT_SNIP_TEMPLATE
+          ? null
+          : this.tempSnipTemplate;
       await this.plugin.saveSettings();
       this.onSave();
       this.close();
