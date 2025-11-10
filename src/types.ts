@@ -37,10 +37,10 @@ export const DEFAULT_EPISODE_TEMPLATE = `# {{episode_title}}
 - Episode title: {{episode_title}}
 - Show: {{show_title}}
 - Owner / Host: {{show_author}}
-- Guests: {{episode_guests}}
+- Guests: {{guests}}
 - Episode publish date: {{episode_publish_date}}
 - Episode AI description: {{episode_ai_description}}
-- Mentioned books: {{episode_books}}
+- Mentioned books: {{mentioned_books}}
 - Duration: {{episode_duration}}
 - Episode URL: [Open in Snipd]({{episode_url}})
 - Show URL: [Open in Snipd]({{show_url}})
