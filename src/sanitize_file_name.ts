@@ -1,3 +1,5 @@
+import * as path from 'path';
+
 export const OBSIDIAN_ILLEGAL_SYMBOLS = ['[', ']', '#', '^', '|', ':', '\\', '/'];
 
 export const PLATFORM_ILLEGAL_SYMBOLS: Record<string, string[]> = {
@@ -36,12 +38,18 @@ export function sanitizeFileName(
   }
   
   const escapedSymbols = illegalSymbols.map(escapeForRegexCharacterClass).join('');
-  let sanitized = name.replace(new RegExp(`[${escapedSymbols}]`, 'g'), '_').slice(0, maxLength).trim();
+  
+  const extensionPart = path.extname(name);
+  const namePart = extensionPart ? name.slice(0, -extensionPart.length) : name;
+  let sanitized = namePart.replace(new RegExp(`[${escapedSymbols}]`, 'g'), '_').trim();
+  if (sanitized.length > maxLength) {
+    sanitized = sanitized.slice(0, maxLength).trim();
+  }
   
   if (!sanitized) {
     return 'untitled';
   }
   
-  return sanitized;
+  return sanitized + extensionPart;
 }
 
