@@ -26,7 +26,6 @@ import { sanitizeFileName } from './sanitize_file_name';
 import { SnipdSettingModal } from './settings_modal';
 import { SecureStorage } from './secure_storage';
 
-export const pluginVersion = "1.0.0";
 export const AUTH_URL = "https://app.snipd.com/obsidian/auth";
 export const API_BASE_URL = isDev() ? "http://0.0.0.0:8080/v1/public/api" : "https://api.snipd.com/v1/public/api";
 
