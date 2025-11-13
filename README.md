@@ -40,14 +40,14 @@ You can download it [here](https://www.snipd.com).
 5. Optionally customize your template
 6. Click "Start syncing" to start your first sync
 
-## Format Customization
+## Custom Formatting
 
 Inside the plugin's settings, go to "Custom formatting" and click "Configure":
 - **Episode filename template**: Customize how episode files are named
 - **Episode template**: Control how episode files are formatted
 - **Snip template**: Control how individual snips appear
 
-## Support
+## Support & Feedback
 
 If you encounter any issues, have questions or want to pass along feature requests, please contact us via the in-app feedback button inside the Snipd mobile app.  
 You can find it in "You" -> Settings -> Feedback.
