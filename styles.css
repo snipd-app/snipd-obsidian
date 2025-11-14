@@ -66,6 +66,8 @@ If your plugin does not need CSS, delete this file.
   color: var(--interactive-accent);
   font-family: var(--font-monospace);
   font-size: 11px;
+  cursor: pointer;
+  text-decoration: underline;
 }
 
 .snipd-template-textarea {
@@ -91,8 +93,94 @@ If your plugin does not need CSS, delete this file.
   justify-content: flex-end;
   gap: 8px;
   margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--background-modifier-border);
 }
 
 .modal-button-container button {
   padding: 6px 12px;
+}
+
+.snipd-modal-scrollable {
+  max-height: calc(80vh - 100px);
+  overflow-y: auto;
+  margin-bottom: 16px;
+}
+
+.snipd-template-input {
+  width: 100%;
+  font-family: var(--font-monospace);
+  padding: 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  background-color: var(--background-primary);
+  color: var(--text-normal);
+}
+
+.snipd-template-input:focus {
+  outline: none;
+  border-color: var(--interactive-accent);
+}
+
+.snipd-syntax-description {
+  margin-bottom: 16px;
+  font-size: 0.9em;
+}
+
+.snipd-hidden {
+  display: none !important;
+}
+
+.snipd-error-text {
+  color: var(--text-error, #e74c3c);
+  font-size: 0.9em;
+}
+
+.snipd-auth-section {
+  background-color: var(--background-secondary, rgba(0, 0, 0, 0.05));
+  padding: 1.5rem;
+  border-radius: 8px;
+  margin-top: 1rem;
+}
+
+.snipd-auth-section .setting-item-heading {
+  margin-top: 0;
+}
+
+.snipd-auth-subtitle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.snipd-auth-subtitle {
+  margin: 0;
+  flex: 1;
+}
+
+.snipd-auth-button {
+  flex-shrink: 0;
+}
+
+.snipd-error-container {
+  display: none;
+  margin-top: 0.75rem;
+}
+
+.snipd-error-container:not(.snipd-hidden) {
+  display: block;
+}
+
+.snipd-sync-status-title {
+  text-transform: capitalize;
+}
+
+.snipd-auth-heading {
+  margin-top: 0;
+}
+
+.snipd-reset-button {
+  background-color: #e74c3c !important;
+  color: white !important;
 }

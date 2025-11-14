@@ -5,7 +5,7 @@ export class SecureStorage {
   
   private static async deriveKey(vaultPath: string): Promise<CryptoKey> {
     const encoder = new TextEncoder();
-    const keyMaterial = await crypto.subtle.importKey(
+    const keyMaterial = await globalThis.crypto.subtle.importKey(
       'raw',
       encoder.encode(vaultPath + this.SERVICE_NAME),
       'PBKDF2',
@@ -15,7 +15,7 @@ export class SecureStorage {
     
     const salt = encoder.encode('snipd-secure-storage-salt-v1');
     
-    return crypto.subtle.deriveKey(
+    return globalThis.crypto.subtle.deriveKey(
       {
         name: 'PBKDF2',
         salt: salt,
@@ -39,9 +39,9 @@ export class SecureStorage {
       const encoder = new TextEncoder();
       const data = encoder.encode(apiKey);
       
-      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
       
-      const encryptedData = await crypto.subtle.encrypt(
+      const encryptedData = await globalThis.crypto.subtle.encrypt(
         {
           name: this.ALGORITHM,
           iv: iv
@@ -55,9 +55,8 @@ export class SecureStorage {
       combined.set(iv);
       combined.set(encryptedArray, iv.length);
       
-      return btoa(String.fromCharCode(...combined));
-    } catch (error) {
-      console.error('Snipd plugin: Failed to encrypt API key:', error);
+      return globalThis.btoa(String.fromCharCode(...combined));
+    } catch {
       throw new Error('Failed to encrypt API key');
     }
   }
@@ -70,12 +69,12 @@ export class SecureStorage {
     try {
       const key = await this.deriveKey(vaultPath);
       
-      const combined = Uint8Array.from(atob(encryptedApiKey), c => c.charCodeAt(0));
+      const combined = Uint8Array.from(globalThis.atob(encryptedApiKey), c => c.charCodeAt(0));
       
       const iv = combined.slice(0, 12);
       const encryptedData = combined.slice(12);
       
-      const decryptedData = await crypto.subtle.decrypt(
+      const decryptedData = await globalThis.crypto.subtle.decrypt(
         {
           name: this.ALGORITHM,
           iv: iv
@@ -86,8 +85,7 @@ export class SecureStorage {
       
       const decoder = new TextDecoder();
       return decoder.decode(decryptedData);
-    } catch (error) {
-      console.error('Snipd plugin: Failed to decrypt API key:', error);
+    } catch {
       return '';
     }
   }

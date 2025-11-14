@@ -1,11 +1,11 @@
 import {
   addIcon,
-  App,
   DataAdapter,
   normalizePath,
   Notice,
   Plugin,
-  TFile
+  TFile,
+  requestUrl
 } from 'obsidian';
 // @ts-ignore
 import * as zip from "@zip.js/zip.js";
@@ -97,9 +97,11 @@ export default class SnipdPlugin extends Plugin {
   }
 
   private clearStatusBarPersistentMessageAfterDelay(delayMs: number): void {
-    setTimeout(() => {
-      this.clearStatusBarPersistentMessage();
-    }, delayMs);
+    this.registerInterval(
+      globalThis.window.setTimeout(() => {
+        this.clearStatusBarPersistentMessage();
+      }, delayMs)
+    );
   }
 
   async checkSnipdDirectoryExists(): Promise<boolean> {
@@ -207,28 +209,23 @@ export default class SnipdPlugin extends Plugin {
     try {
       debugLog(`Snipd plugin: fetching metadata from ${url}`);
       this.setStatusBarPersistentMessage("Fetching metadata...");
-      response = await fetch(url, {
+      response = await requestUrl({
+        url: url,
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${this.settings.apiKey}`,
         },
-        signal: this.syncAbortController?.signal,
       });
       debugLog(`Snipd plugin: metadata response status: ${response.status}`);
     } catch (e) {
-      if (e instanceof Error && e.name === 'AbortError') {
-        debugLog("Snipd plugin: fetch aborted by user");
-        this.clearStatusBarPersistentMessage();
-        return null;
-      }
-      console.error("Snipd plugin: fetch failed in syncSnipd: ", e);
+      debugLog("Snipd plugin: request failed in syncSnipd: ", e);
       const errorMsg = "Sync failed: unable to connect to server." + (isDev() ? ` Detail: ${e}` : "");
       await this.handleSyncError(errorMsg);
       return null;
     }
 
-    if (response && response.ok) {
-      const metadata = await response.json();
+    if (response && response.status >= 200 && response.status < 300) {
+      const metadata = response.json as FetchExportMetadataResponse;
       await this.saveMetadataToFile(metadata);
       
       if (debugFolderPath) {
@@ -258,9 +255,9 @@ export default class SnipdPlugin extends Plugin {
       
       return metadata;
     } else {
-      console.error("Snipd plugin: bad response in syncSnipd: ", response);
-      const statusCode = response ? response.status : "";
-      const errorMsg = `Sync failed${statusCode ? ` (${statusCode})` : ""}` + (isDev() && response ? ` Detail: ${response.statusText}` : "");
+      debugLog("Snipd plugin: bad response in syncSnipd: ", response);
+      const statusCode = response ? response.status : 0;
+      const errorMsg = `Sync failed${statusCode ? ` (${statusCode})` : ""}` + (isDev() && response ? ` Detail: ${response.status}` : "");
       await this.handleSyncError(errorMsg);
       return null;
     }
@@ -348,29 +345,25 @@ export default class SnipdPlugin extends Plugin {
     let response;
     try {
       const requestBody = this.buildBatchRequestBody(episodeIds);
-      response = await fetch(`${API_BASE_URL}/obsidian/export-episode-snips`, {
+      response = await requestUrl({
+        url: `${API_BASE_URL}/obsidian/export-episode-snips`,
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${this.settings.apiKey}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(requestBody),
-        signal: this.syncAbortController?.signal,
       });
     } catch (e) {
-      if (e instanceof Error && e.name === 'AbortError') {
-        debugLog("Snipd plugin: fetch aborted by user");
-        this.clearStatusBarPersistentMessage();
-        return null;
-      }
-      console.error("Snipd plugin: fetch failed for batch: ", e);
+      debugLog("Snipd plugin: request failed for batch: ", e);
       const errorMsg = "Sync failed: unable to connect to server." + (isDev() ? ` Detail: ${e}` : "");
       await this.handleSyncError(errorMsg);
       return null;
     }
 
-    if (response && response.ok) {
-      const blob = await response.blob();
+    if (response && response.status >= 200 && response.status < 300) {
+      const arrayBuffer = response.arrayBuffer;
+      const blob = new Blob([arrayBuffer]);
       
       if (debugFolderPath) {
         const batchFileName = `batch_${batchIndex}_${Date.now()}.zip`;
@@ -392,9 +385,9 @@ export default class SnipdPlugin extends Plugin {
 
       return stats;
     } else {
-      console.error("Snipd plugin: bad response for batch: ", response);
-      const statusCode = response ? response.status : "";
-      const errorMsg = `Sync failed at batch ${batchIndex + 1}${statusCode ? ` (${statusCode})` : ""}` + (isDev() && response ? ` Detail: ${response.statusText}` : "");
+      debugLog("Snipd plugin: bad response for batch: ", response);
+      const statusCode = response ? response.status : 0;
+      const errorMsg = `Sync failed at batch ${batchIndex + 1}${statusCode ? ` (${statusCode})` : ""}` + (isDev() && response ? ` Detail: ${response.status}` : "");
       await this.handleSyncError(errorMsg);
       return null;
     }
@@ -427,7 +420,7 @@ export default class SnipdPlugin extends Plugin {
 
       return { episodeCount: totalEpisodes, snipCount: totalSnips };
     } catch (e) {
-      console.error("Snipd plugin: error processing batches: ", e);
+      debugLog("Snipd plugin: error processing batches: ", e);
       const errorMsg = "Sync failed: error processing data." + (isDev() ? ` Detail: ${e}` : "");
       await this.handleSyncError(errorMsg);
       return null;
@@ -499,7 +492,8 @@ export default class SnipdPlugin extends Plugin {
       if (this.settings.onlyEditedSnips) {
         url += '?only_edited_snips=true';
       }
-      response = await fetch(url, {
+      response = await requestUrl({
+        url: url,
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${this.settings.apiKey}`,
@@ -507,7 +501,7 @@ export default class SnipdPlugin extends Plugin {
       });
       debugLog(`Snipd plugin: test metadata response status: ${response.status}`);
     } catch (e) {
-      console.error("Snipd plugin: fetch failed in testSyncRandomEpisodes: ", e);
+      debugLog("Snipd plugin: request failed in testSyncRandomEpisodes: ", e);
       const errorMsg = "Test sync failed: unable to connect to server." + (isDev() ? ` Detail: ${e}` : "");
       this.settings.isTestSyncing = false;
       await this.saveSettings();
@@ -519,8 +513,8 @@ export default class SnipdPlugin extends Plugin {
       return;
     }
 
-    if (response && response.ok) {
-      const metadata: FetchExportMetadataResponse = await response.json();
+    if (response && response.status >= 200 && response.status < 300) {
+      const metadata = response.json as FetchExportMetadataResponse;
       
       if (debugFolderPath) {
         await createDirForFile(`${debugFolderPath}/test_metadata.json`, this.app.vault.adapter);
@@ -582,7 +576,8 @@ export default class SnipdPlugin extends Plugin {
           exportRequestBody.only_edited_snips = true;
         }
         
-        exportResponse = await fetch(`${API_BASE_URL}/obsidian/export-episode-snips`, {
+        exportResponse = await requestUrl({
+          url: `${API_BASE_URL}/obsidian/export-episode-snips`,
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${this.settings.apiKey}`,
@@ -591,7 +586,7 @@ export default class SnipdPlugin extends Plugin {
           body: JSON.stringify(exportRequestBody),
         });
       } catch (e) {
-        console.error("Snipd plugin: export fetch failed: ", e);
+        debugLog("Snipd plugin: export request failed: ", e);
         const errorMsg = "Test sync failed: unable to connect to server." + (isDev() ? ` Detail: ${e}` : "");
         this.settings.isTestSyncing = false;
         await this.saveSettings();
@@ -603,8 +598,9 @@ export default class SnipdPlugin extends Plugin {
         return;
       }
 
-      if (exportResponse && exportResponse.ok) {
-        const blob = await exportResponse.blob();
+      if (exportResponse && exportResponse.status >= 200 && exportResponse.status < 300) {
+        const arrayBuffer = exportResponse.arrayBuffer;
+        const blob = new Blob([arrayBuffer]);
         
         if (debugFolderPath) {
           const testExportFileName = `test_export_${Date.now()}.zip`;
@@ -639,9 +635,9 @@ export default class SnipdPlugin extends Plugin {
         this.setStatusBarPersistentMessage(`Test sync completed (${stats.episodeCount} episodes, ${stats.snipCount} snips)`);
         this.clearStatusBarPersistentMessageAfterDelay(3000);
       } else {
-        console.error("Snipd plugin: bad response for test export: ", exportResponse);
-        const statusCode = exportResponse ? exportResponse.status : "";
-        const errorMsg = `Test sync failed${statusCode ? ` (${statusCode})` : ""}` + (isDev() && exportResponse ? ` Detail: ${exportResponse.statusText}` : "");
+        debugLog("Snipd plugin: bad response for test export: ", exportResponse);
+        const statusCode = exportResponse ? exportResponse.status : 0;
+        const errorMsg = `Test sync failed${statusCode ? ` (${statusCode})` : ""}` + (isDev() && exportResponse ? ` Detail: ${exportResponse.status}` : "");
         this.settings.isTestSyncing = false;
         await this.saveSettings();
         if (this.settingsTab) {
@@ -651,9 +647,9 @@ export default class SnipdPlugin extends Plugin {
         this.clearStatusBarPersistentMessage();
       }
     } else {
-      console.error("Snipd plugin: bad response in testSyncRandomEpisodes: ", response);
-      const statusCode = response ? response.status : "";
-      const errorMsg = `Test sync failed${statusCode ? ` (${statusCode})` : ""}` + (isDev() && response ? ` Detail: ${response.statusText}` : "");
+      debugLog("Snipd plugin: bad response in testSyncRandomEpisodes: ", response);
+      const statusCode = response ? response.status : 0;
+      const errorMsg = `Test sync failed${statusCode ? ` (${statusCode})` : ""}` + (isDev() && response ? ` Detail: ${response.status}` : "");
       this.settings.isTestSyncing = false;
       await this.saveSettings();
       if (this.settingsTab) {
@@ -675,16 +671,18 @@ export default class SnipdPlugin extends Plugin {
     const episodeFiles: Map<string, { full: string; append?: string }> = new Map();
 
     for (const entry of entries) {
-      if (entry.directory) {
+      // @ts-ignore - zip.js types are incomplete
+      const zipEntry: zip.Entry = entry;
+      if (zipEntry.directory) {
         continue;
       }
       // @ts-ignore
-      const fileContent = await entry.getData(new zip.TextWriter());
+      const fileContent = await zipEntry.getData(new zip.TextWriter());
 
-      if (entry.filename === 'metadata.json') {
-        metadata = JSON.parse(fileContent);
-      } else if (entry.filename.startsWith('episodes/')) {
-        const filename = entry.filename.replace('episodes/', '');
+      if (zipEntry.filename === 'metadata.json') {
+        metadata = JSON.parse(fileContent) as MetadataJson;
+      } else if (zipEntry.filename.startsWith('episodes/')) {
+        const filename = zipEntry.filename.replace('episodes/', '');
         const match = filename.match(/^(.+?)_(full_content|append_only_content)\.md$/);
         if (match) {
           const [, id, type] = match;
@@ -720,7 +718,7 @@ export default class SnipdPlugin extends Plugin {
     for (const [episodeId, fileData] of episodeFiles) {
       const episodeData = episodesData[episodeId];
       if (!episodeData) {
-        console.warn(`Snipd plugin: No metadata found for episode ${episodeId}`);
+        debugLog(`Snipd plugin: No metadata found for episode ${episodeId}`);
       }
       const episodeName = generateEpisodeFileName(episodeData, episodeId, this.settings);
       const showId = episodeData?.show_id;
@@ -840,7 +838,7 @@ export default class SnipdPlugin extends Plugin {
     this.settings.baseFileManualOverrides = this.settings.baseFileManualOverrides || {};
     const manualOverrides = this.settings.baseFileManualOverrides;
     const existingHashes = { ...(this.settings.baseFileHashes || {}) };
-    let zipReader: any = null;
+    let zipReader: zip.ZipReader<zip.BlobReader> | null = null;
     let updatedFileCount = 0;
     let removedFileCount = 0;
     let baseFileMetadata: BaseFileMetadata | null = null;
@@ -848,35 +846,41 @@ export default class SnipdPlugin extends Plugin {
     try {
       debugLog('Snipd plugin: fetching base file...');
       
-      const response = await fetch(`${API_BASE_URL}/obsidian/export-base-file`, {
+      const response = await requestUrl({
+        url: `${API_BASE_URL}/obsidian/export-base-file`,
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${this.settings.apiKey}`,
         },
-        signal: this.syncAbortController?.signal,
       });
 
-      if (!response.ok) {
-        console.error("Snipd plugin: bad response for base file: ", response);
+      if (response.status < 200 || response.status >= 300) {
+        debugLog("Snipd plugin: bad response for base file: ", response);
         debugLog(`Snipd plugin: failed to fetch base file (${response.status})`);
         return;
       }
 
-      const blob = await response.blob();
+      const arrayBuffer = response.arrayBuffer;
+      const blob = new Blob([arrayBuffer]);
       const blobReader = new zip.BlobReader(blob);
       zipReader = new zip.ZipReader(blobReader);
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call
       const entries = await zipReader.getEntries();
 
       for (const entry of entries) {
-        if (entry.directory) {
+        // @ts-ignore - zip.js types are incomplete
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        const zipEntry: zip.Entry = entry;
+        if (zipEntry.directory) {
           continue;
         }
         
         // @ts-ignore
-        const fileContent = await entry.getData(new zip.TextWriter());
+         
+        const fileContent = await zipEntry.getData(new zip.TextWriter());
         
-        if (entry.filename === 'metadata.json') {
-          baseFileMetadata = JSON.parse(fileContent);
+        if (zipEntry.filename === 'metadata.json') {
+          baseFileMetadata = JSON.parse(fileContent) as BaseFileMetadata;
           const metadataPath = normalizePath(`${folderPath}/metadata.json`);
           await createDirForFile(metadataPath, this.app.vault.adapter);
           await this.app.vault.adapter.write(metadataPath, fileContent);
@@ -884,7 +888,7 @@ export default class SnipdPlugin extends Plugin {
           continue;
         }
         
-        let relativePath = entry.filename;
+        let relativePath = zipEntry.filename;
         if (relativePath.startsWith('Files/')) {
           relativePath = relativePath.substring(6);
         }
@@ -912,7 +916,7 @@ export default class SnipdPlugin extends Plugin {
           } catch (error) {
             manualOverrides[baseFilePath] = true;
             debugLog(`Snipd plugin: failed to validate base file ${baseFilePath} - marking as manually overridden.`);
-            console.error('Snipd plugin: failed to validate base file integrity:', error);
+            debugLog('Snipd plugin: failed to validate base file integrity:', error);
             continue;
           }
         }
@@ -938,18 +942,14 @@ export default class SnipdPlugin extends Plugin {
         }
       }
     } catch (e) {
-      if (e instanceof Error && e.name === 'AbortError') {
-        debugLog("Snipd plugin: base file fetch aborted by user");
-        return;
-      }
-      console.error("Snipd plugin: error fetching base file: ", e);
+      debugLog("Snipd plugin: error fetching base file: ", e);
       debugLog(`Snipd plugin: failed to fetch base file: ${e}`);
     } finally {
       if (zipReader) {
         try {
           await zipReader.close();
         } catch (closeError) {
-          console.error('Snipd plugin: failed to close base file zip reader:', closeError);
+          debugLog('Snipd plugin: failed to close base file zip reader:', closeError);
         }
       }
     }
@@ -966,37 +966,44 @@ export default class SnipdPlugin extends Plugin {
   }
 
   async fetchAndSaveBaseFileForTest(folderPath: string): Promise<void> {
-    let zipReader: any = null;
+    let zipReader: zip.ZipReader<zip.BlobReader> | null = null;
     try {
       debugLog('Snipd plugin: fetching base file for test sync...');
       
-      const response = await fetch(`${API_BASE_URL}/obsidian/export-base-file`, {
+      const response = await requestUrl({
+        url: `${API_BASE_URL}/obsidian/export-base-file`,
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${this.settings.apiKey}`,
         },
       });
 
-      if (!response.ok) {
-        console.error("Snipd plugin: bad response for base file in test sync: ", response);
+      if (response.status < 200 || response.status >= 300) {
+        debugLog("Snipd plugin: bad response for base file in test sync: ", response);
         debugLog(`Snipd plugin: failed to fetch base file for test sync (${response.status})`);
         return;
       }
 
-      const blob = await response.blob();
+      const arrayBuffer = response.arrayBuffer;
+      const blob = new Blob([arrayBuffer]);
       const blobReader = new zip.BlobReader(blob);
       zipReader = new zip.ZipReader(blobReader);
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call
       const entries = await zipReader.getEntries();
 
       for (const entry of entries) {
-        if (entry.directory) {
+        // @ts-ignore - zip.js types are incomplete
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        const zipEntry: zip.Entry = entry;
+        if (zipEntry.directory) {
           continue;
         }
         
         // @ts-ignore
-        const fileContent = await entry.getData(new zip.TextWriter());
+         
+        const fileContent = await zipEntry.getData(new zip.TextWriter());
         
-        if (entry.filename === 'metadata.json') {
+        if (zipEntry.filename === 'metadata.json') {
           const metadataPath = normalizePath(`${folderPath}/metadata.json`);
           await createDirForFile(metadataPath, this.app.vault.adapter);
           await this.app.vault.adapter.write(metadataPath, fileContent);
@@ -1004,7 +1011,7 @@ export default class SnipdPlugin extends Plugin {
           continue;
         }
         
-        let relativePath = entry.filename;
+        let relativePath = zipEntry.filename;
         if (relativePath.startsWith('Files/')) {
           relativePath = relativePath.substring(6);
         }
@@ -1016,14 +1023,14 @@ export default class SnipdPlugin extends Plugin {
         debugLog(`Snipd plugin: saved base file to ${baseFilePath} (test sync - always overwrite)`);
       }
     } catch (e) {
-      console.error("Snipd plugin: error fetching base file for test sync: ", e);
+      debugLog("Snipd plugin: error fetching base file for test sync: ", e);
       debugLog(`Snipd plugin: failed to fetch base file for test sync: ${e}`);
     } finally {
       if (zipReader) {
         try {
           await zipReader.close();
         } catch (closeError) {
-          console.error('Snipd plugin: failed to close base file zip reader in test sync:', closeError);
+          debugLog('Snipd plugin: failed to close base file zip reader in test sync:', closeError);
         }
       }
     }
@@ -1031,16 +1038,18 @@ export default class SnipdPlugin extends Plugin {
 
   async configureSchedule() {
     const minutes = parseInt(this.settings.frequency);
-    let milliseconds = minutes * 60 * 1000;
+    const milliseconds = minutes * 60 * 1000;
     debugLog('Snipd plugin: setting interval to ', milliseconds, 'milliseconds');
     if (this.scheduleInterval !== null) {
-      window.clearInterval(this.scheduleInterval);
+      globalThis.window.clearInterval(this.scheduleInterval);
       this.scheduleInterval = null;
     }
     if (!milliseconds) {
       return;
     }
-    this.scheduleInterval = window.setInterval(() => this.syncSnipd(), milliseconds);
+    this.scheduleInterval = globalThis.window.setInterval(() => {
+      void this.syncSnipd();
+    }, milliseconds);
     this.registerInterval(this.scheduleInterval);
   }
 
@@ -1054,12 +1063,12 @@ export default class SnipdPlugin extends Plugin {
       if (metadataExists) {
         try {
           const metadataContent = await this.app.vault.adapter.read(metadataPath);
-          const metadata: BaseFileMetadata = JSON.parse(metadataContent);
+          const metadata = JSON.parse(metadataContent) as BaseFileMetadata;
           defaultOpenPath = metadata.defaultOpenPath;
           this.settings.baseFileDefaultOpenPath = defaultOpenPath;
           await this.saveSettings();
         } catch (error) {
-          console.error('Snipd plugin: failed to read base file metadata:', error);
+          debugLog('Snipd plugin: failed to read base file metadata:', error);
         }
       }
       
@@ -1087,8 +1096,8 @@ export default class SnipdPlugin extends Plugin {
 
   async onload() {
     addIcon('snipd', `<path d="M30.458 18.725c-14.395 13.692-14.395 35.75 0 49.446L16.667 81.279c14.57 13.85 38.308 13.85 52.875 0 14.391-13.691 14.391-35.75 0-49.437l13.791-13.117c-14.57-13.854-38.308-13.854-52.875 0" stroke="#B2B2B2FF" stroke-width="8.33333" fill="none"/>`);
-    this.addRibbonIcon('snipd', 'Open Snipd Base', async () => {
-      await this.openBaseFile();
+    this.addRibbonIcon('snipd', 'Open Snipd Base', () => {
+      void this.openBaseFile();
     });
 
     await this.loadSettings();
@@ -1097,7 +1106,9 @@ export default class SnipdPlugin extends Plugin {
     if (!this.app.isMobile) {
       this.statusBar = new StatusBar(this.addStatusBarItem());
       this.registerInterval(
-        window.setInterval(() => this.statusBar.display(), 1000)
+        globalThis.window.setInterval(() => {
+          this.statusBar.display();
+        }, 1000)
       );
     }
 
@@ -1105,15 +1116,15 @@ export default class SnipdPlugin extends Plugin {
       id: 'snipd-sync',
       name: 'Sync now',
       callback: () => {
-        this.syncSnipd();
+        void this.syncSnipd();
       }
     });
 
     this.addCommand({
       id: 'snipd-open-base',
-      name: 'Open Base file',
+      name: 'Open base file',
       callback: () => {
-        this.openBaseFile();
+        void this.openBaseFile();
       }
     });
 
@@ -1151,11 +1162,13 @@ export default class SnipdPlugin extends Plugin {
 
   private async persistSettings(): Promise<void> {
     const { apiKey, ...settingsWithoutApiKey } = this.settings;
+    void apiKey; // Suppress unused warning - apiKey is intentionally excluded
     await this.saveData(settingsWithoutApiKey);
   }
 
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const loadedData = await this.loadData() as Partial<SnipdPluginSettings>;
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, loadedData);
     
     if (this.settings.encryptedApiKey) {
       try {
@@ -1164,7 +1177,7 @@ export default class SnipdPlugin extends Plugin {
           this.getVaultIdentifier()
         );
       } catch (error) {
-        console.error('Snipd plugin: Failed to decrypt API key:', error);
+        debugLog('Snipd plugin: Failed to decrypt API key:', error);
         this.settings.apiKey = '';
       }
     } else if (this.settings.apiKey) {
@@ -1175,7 +1188,7 @@ export default class SnipdPlugin extends Plugin {
         );
         await this.persistSettings();
       } catch (error) {
-        console.error('Snipd plugin: Failed to encrypt existing API key:', error);
+        debugLog('Snipd plugin: Failed to encrypt existing API key:', error);
       }
     }
   }
@@ -1188,7 +1201,7 @@ export default class SnipdPlugin extends Plugin {
           this.getVaultIdentifier()
         );
       } catch (error) {
-        console.error('Snipd plugin: Failed to encrypt API key:', error);
+        debugLog('Snipd plugin: Failed to encrypt API key:', error);
       }
     }
     

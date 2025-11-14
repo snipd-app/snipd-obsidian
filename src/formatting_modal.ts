@@ -1,4 +1,4 @@
-import { App, Modal, Notice } from 'obsidian';
+import { App, Modal, Notice, Platform } from 'obsidian';
 import type SnipdPlugin from './main';
 import { DEFAULT_EPISODE_TEMPLATE, DEFAULT_SNIP_TEMPLATE, DEFAULT_EPISODE_FILE_NAME_TEMPLATE } from './types';
 
@@ -23,9 +23,6 @@ export class FormattingConfigModal extends Modal {
     contentEl.empty();
     
     const scrollableContent = contentEl.createDiv({ cls: 'snipd-modal-scrollable' });
-    scrollableContent.style.maxHeight = 'calc(80vh - 100px)';
-    scrollableContent.style.overflowY = 'auto';
-    scrollableContent.style.marginBottom = '16px';
     
     scrollableContent.createEl('h2', { text: 'Custom formatting' });
     scrollableContent.createEl('p', { 
@@ -33,9 +30,7 @@ export class FormattingConfigModal extends Modal {
       cls: 'setting-item-description'
     });
     
-    const syntaxDesc = scrollableContent.createDiv({ cls: 'setting-item-description' });
-    syntaxDesc.style.marginBottom = '16px';
-    syntaxDesc.style.fontSize = '0.9em';
+    const syntaxDesc = scrollableContent.createDiv({ cls: 'setting-item-description snipd-syntax-description' });
     syntaxDesc.createEl('strong', { text: 'Guide: ' });
     syntaxDesc.appendText('Use ');
     syntaxDesc.createEl('code', { text: '{{variable}}' });
@@ -58,11 +53,21 @@ export class FormattingConfigModal extends Modal {
     ];
     fileNameVars.forEach((varName, index) => {
       const varSpan = fileNameVarsDesc.createSpan({ cls: 'snipd-template-variable', text: varName });
-      varSpan.style.cursor = 'pointer';
-      varSpan.style.textDecoration = 'underline';
       varSpan.addEventListener('click', () => {
-        navigator.clipboard.writeText(varName);
-        new Notice(`Copied ${varName} to clipboard`);
+        void (async () => {
+          if (Platform.isDesktopApp) {
+            await globalThis.navigator.clipboard.writeText(varName);
+          } else {
+            const textArea = globalThis.document.createElement('textarea');
+            textArea.value = varName;
+            globalThis.document.body.appendChild(textArea);
+            textArea.select();
+            // eslint-disable-next-line @typescript-eslint/no-deprecated
+            globalThis.document.execCommand('copy');
+            globalThis.document.body.removeChild(textArea);
+          }
+          new Notice(`Copied ${varName} to clipboard`);
+        })();
       });
       if (index < fileNameVars.length - 1) {
         fileNameVarsDesc.appendText(', ');
@@ -74,9 +79,6 @@ export class FormattingConfigModal extends Modal {
       type: 'text',
     });
     fileNameInput.value = this.tempEpisodeFileNameTemplate;
-    fileNameInput.style.width = '100%';
-    fileNameInput.style.fontFamily = 'monospace';
-    fileNameInput.style.padding = '8px';
     fileNameInput.addEventListener('input', () => {
       this.tempEpisodeFileNameTemplate = fileNameInput.value;
     });
@@ -103,11 +105,21 @@ export class FormattingConfigModal extends Modal {
     ];
     episodeVars.forEach((varName, index) => {
       const varSpan = episodeVarsDesc.createSpan({ cls: 'snipd-template-variable', text: varName });
-      varSpan.style.cursor = 'pointer';
-      varSpan.style.textDecoration = 'underline';
       varSpan.addEventListener('click', () => {
-        navigator.clipboard.writeText(varName);
-        new Notice(`Copied ${varName} to clipboard`);
+        void (async () => {
+          if (Platform.isDesktopApp) {
+            await globalThis.navigator.clipboard.writeText(varName);
+          } else {
+            const textArea = globalThis.document.createElement('textarea');
+            textArea.value = varName;
+            globalThis.document.body.appendChild(textArea);
+            textArea.select();
+            // eslint-disable-next-line @typescript-eslint/no-deprecated
+            globalThis.document.execCommand('copy');
+            globalThis.document.body.removeChild(textArea);
+          }
+          new Notice(`Copied ${varName} to clipboard`);
+        })();
       });
       if (index < episodeVars.length - 1) {
         episodeVarsDesc.appendText(', ');
@@ -119,8 +131,6 @@ export class FormattingConfigModal extends Modal {
     });
     episodeTextarea.value = this.tempEpisodeTemplate;
     episodeTextarea.rows = 10;
-    episodeTextarea.style.width = '100%';
-    episodeTextarea.style.fontFamily = 'monospace';
     episodeTextarea.addEventListener('input', () => {
       this.tempEpisodeTemplate = episodeTextarea.value;
     });
@@ -144,11 +154,21 @@ export class FormattingConfigModal extends Modal {
     ];
     snipVars.forEach((varName, index) => {
       const varSpan = snipVarsDesc.createSpan({ cls: 'snipd-template-variable', text: varName });
-      varSpan.style.cursor = 'pointer';
-      varSpan.style.textDecoration = 'underline';
       varSpan.addEventListener('click', () => {
-        navigator.clipboard.writeText(varName);
-        new Notice(`Copied ${varName} to clipboard`);
+        void (async () => {
+          if (Platform.isDesktopApp) {
+            await globalThis.navigator.clipboard.writeText(varName);
+          } else {
+            const textArea = globalThis.document.createElement('textarea');
+            textArea.value = varName;
+            globalThis.document.body.appendChild(textArea);
+            textArea.select();
+            // eslint-disable-next-line @typescript-eslint/no-deprecated
+            globalThis.document.execCommand('copy');
+            globalThis.document.body.removeChild(textArea);
+          }
+          new Notice(`Copied ${varName} to clipboard`);
+        })();
       });
       if (index < snipVars.length - 1) {
         snipVarsDesc.appendText(', ');
@@ -160,19 +180,11 @@ export class FormattingConfigModal extends Modal {
     });
     snipTextarea.value = this.tempSnipTemplate;
     snipTextarea.rows = 10;
-    snipTextarea.style.width = '100%';
-    snipTextarea.style.fontFamily = 'monospace';
     snipTextarea.addEventListener('input', () => {
       this.tempSnipTemplate = snipTextarea.value;
     });
 
     const buttonContainer = contentEl.createDiv({ cls: 'modal-button-container' });
-    buttonContainer.style.display = 'flex';
-    buttonContainer.style.justifyContent = 'flex-end';
-    buttonContainer.style.gap = '8px';
-    buttonContainer.style.paddingTop = '16px';
-    buttonContainer.style.borderTop = '1px solid var(--background-modifier-border)';
-    buttonContainer.style.marginTop = '0';
 
     const resetButton = buttonContainer.createEl('button', { text: 'Reset to default' });
     resetButton.addEventListener('click', () => {
@@ -193,22 +205,24 @@ export class FormattingConfigModal extends Modal {
       text: 'Save',
       cls: 'mod-cta'
     });
-    saveButton.addEventListener('click', async () => {
-      this.plugin.settings.episodeFileNameTemplate = 
-        this.tempEpisodeFileNameTemplate === DEFAULT_EPISODE_FILE_NAME_TEMPLATE
-          ? null
-          : this.tempEpisodeFileNameTemplate;
-      this.plugin.settings.episodeTemplate = 
-        this.tempEpisodeTemplate === DEFAULT_EPISODE_TEMPLATE
-          ? null
-          : this.tempEpisodeTemplate;
-      this.plugin.settings.snipTemplate = 
-        this.tempSnipTemplate === DEFAULT_SNIP_TEMPLATE
-          ? null
-          : this.tempSnipTemplate;
-      await this.plugin.saveSettings();
-      this.onSave();
-      this.close();
+    saveButton.addEventListener('click', () => {
+      void (async () => {
+        this.plugin.settings.episodeFileNameTemplate = 
+          this.tempEpisodeFileNameTemplate === DEFAULT_EPISODE_FILE_NAME_TEMPLATE
+            ? null
+            : this.tempEpisodeFileNameTemplate;
+        this.plugin.settings.episodeTemplate = 
+          this.tempEpisodeTemplate === DEFAULT_EPISODE_TEMPLATE
+            ? null
+            : this.tempEpisodeTemplate;
+        this.plugin.settings.snipTemplate = 
+          this.tempSnipTemplate === DEFAULT_SNIP_TEMPLATE
+            ? null
+            : this.tempSnipTemplate;
+        await this.plugin.saveSettings();
+        this.onSave();
+        this.close();
+      })();
     });
   }
 

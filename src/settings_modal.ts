@@ -1,8 +1,8 @@
-import { App, Notice, normalizePath, PluginSettingTab, Setting, Platform } from 'obsidian';
+import { App, Notice, normalizePath, PluginSettingTab, Setting, Platform, requestUrl } from 'obsidian';
 import type SnipdPlugin from './main';
 import { FormattingConfigModal } from './formatting_modal';
 import { DEFAULT_SETTINGS } from './types';
-import { isDev } from './utils';
+import { isDev, debugLog } from './utils';
 import { API_BASE_URL, AUTH_URL } from './main';
 
 export class SnipdSettingModal extends PluginSettingTab {
@@ -16,7 +16,7 @@ export class SnipdSettingModal extends PluginSettingTab {
 
   hide() {
     if (this.refreshInterval !== null) {
-      window.clearInterval(this.refreshInterval);
+      globalThis.window.clearInterval(this.refreshInterval);
       this.refreshInterval = null;
     }
     this.plugin.settingsTab = null;
@@ -32,14 +32,14 @@ export class SnipdSettingModal extends PluginSettingTab {
 
   openExternal(url: string) {
     if (!Platform.isDesktopApp) {
-      // mobile/web: just fall back to window.open
-      window.open(url);
+      globalThis.window.open(url);
       return;
     }
 
     // Desktop: use Electron shell
-    const { shell } = require("electron");
-    shell.openExternal(url);
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, no-undef
+    const electron = require("electron") as { shell: { openExternal: (url: string) => void } };
+    electron.shell.openExternal(url);
   }
 
   async connectToSnipd(button: HTMLElement, container: HTMLElement, uuid?: string): Promise<void> {
@@ -48,27 +48,29 @@ export class SnipdSettingModal extends PluginSettingTab {
     }
 
     container.empty();
-    container.style.display = 'none';
+    container.addClass('snipd-hidden');
     this.openExternal(`${AUTH_URL}?uuid=${uuid}`);
 
-    let response, data: { token?: string };
+    let response;
+    let data: { token?: string };
 
     try {
-      response = await fetch(
-        `${API_BASE_URL}/obsidian/auth?uuid=${uuid}`
-      );
+      response = await requestUrl({
+        url: `${API_BASE_URL}/obsidian/auth?uuid=${uuid}`,
+        method: 'GET',
+      });
     } catch (e) {
-      console.log("Snipd plugin: fetch failed in connectToSnipd: ", e);
+      debugLog("Snipd plugin: request failed in connectToSnipd: ", e);
       button.textContent = 'Connect';
       button.removeAttribute('disabled');
       this.showInfoStatus(container, "Connection failed. Try again", "snipd-error");
       return;
     }
 
-    if (response && response.ok) {
-      data = await response.json();
+    if (response && response.status >= 200 && response.status < 300) {
+      data = response.json as { token?: string };
     } else {
-      console.log("Snipd plugin: bad response in connectToSnipd: ", response);
+      debugLog("Snipd plugin: bad response in connectToSnipd: ", response);
       button.textContent = 'Connect';
       button.removeAttribute('disabled');
       this.showInfoStatus(container, "Connection failed. Try again", "snipd-error");
@@ -76,13 +78,13 @@ export class SnipdSettingModal extends PluginSettingTab {
     }
 
     if (data.token) {
-      console.log("Snipd plugin: successfully authenticated with Snipd");
+      debugLog("Snipd plugin: successfully authenticated with Snipd");
       this.plugin.settings.apiKey = data.token;
       await this.plugin.saveSettings();
       this.display();
       new Notice("Successfully connected to Snipd");
     } else {
-      console.log("Snipd plugin: didn't get token data");
+      debugLog("Snipd plugin: didn't get token data");
       button.textContent = 'Connect';
       button.removeAttribute('disabled');
       this.showInfoStatus(container, "Authorization failed. Please try again", "snipd-error");
@@ -94,11 +96,10 @@ export class SnipdSettingModal extends PluginSettingTab {
       return;
     }
     container.empty();
-    container.style.display = 'block';
+    container.removeClass('snipd-hidden');
     const statusEl = container.createDiv({ cls });
     statusEl.textContent = message;
-    statusEl.style.color = 'var(--text-error, #e74c3c)';
-    statusEl.style.fontSize = '0.9em';
+    statusEl.addClass('snipd-error-text');
   }
 
   display(): void {
@@ -106,42 +107,29 @@ export class SnipdSettingModal extends PluginSettingTab {
     let { containerEl } = this;
 
     containerEl.empty();
-    containerEl.createEl('h1', { text: 'Snipd Official' });
+    ;
     containerEl.createEl('p', { text: 'Sync your Snipd content to Obsidian' });
 
     if (!this.plugin.settings.apiKey) {
       const authSection = containerEl.createDiv({ cls: 'snipd-auth-section' });
-      authSection.style.backgroundColor = 'var(--background-secondary, rgba(0, 0, 0, 0.05))';
-      authSection.style.padding = '1.5rem';
-      authSection.style.borderRadius = '8px';
-      authSection.style.marginTop = '1rem';
-      const title = authSection.createEl('h3', { text: 'Connect Obsidian to Snipd' });
-      title.style.marginTop = '0';
+      const title = new Setting(authSection).setName("Connect Obsidian to Snipd").setHeading();
+      title.settingEl.addClass('snipd-auth-heading');
       
-      const subtitleRow = authSection.createDiv();
-      subtitleRow.style.display = 'flex';
-      subtitleRow.style.alignItems = 'center';
-      subtitleRow.style.justifyContent = 'space-between';
-      subtitleRow.style.gap = '1rem';
+      const subtitleRow = authSection.createDiv({ cls: 'snipd-auth-subtitle-row' });
       
-      const subtitle = subtitleRow.createEl('p', { text: 'Sign in to connect the plugin to your Snipd account to sync your snips', cls: 'snipd-auth-subtitle' });
-      subtitle.style.margin = '0';
-      subtitle.style.flex = '1';
+      subtitleRow.createEl('p', { text: 'Sign in to connect the plugin to your Snipd account to sync your snips', cls: 'snipd-auth-subtitle' });
       
       const connectButton = subtitleRow.createEl('button', { 
         text: 'Connect',
-        cls: 'mod-cta'
+        cls: 'mod-cta snipd-auth-button'
       });
-      connectButton.style.flexShrink = '0';
       
-      const errorContainer = authSection.createDiv({ cls: 'snipd-error-container' });
-      errorContainer.style.display = 'none';
-      errorContainer.style.marginTop = '0.75rem';
+      const errorContainer = authSection.createDiv({ cls: 'snipd-error-container snipd-hidden' });
       
-      connectButton.addEventListener('click', async () => {
+      connectButton.addEventListener('click', () => {
         connectButton.textContent = 'Connecting...';
         connectButton.setAttribute('disabled', 'true');
-        await this.connectToSnipd(connectButton, errorContainer);
+        void this.connectToSnipd(connectButton, errorContainer);
       });
       return;
     }
@@ -149,14 +137,14 @@ export class SnipdSettingModal extends PluginSettingTab {
     const syncStatusContainer = containerEl.createDiv({ cls: 'snipd-sync-status' });
     
     const syncStatusHeader = syncStatusContainer.createDiv({ cls: 'snipd-sync-status-header' });
-    syncStatusHeader.createEl('div', { text: 'Sync Status', cls: 'snipd-sync-status-title' });
+    syncStatusHeader.createEl('div', { text: 'Sync status', cls: 'snipd-sync-status-title' });
     
     if (this.plugin.settings.isSyncing) {
       const stopButton = syncStatusHeader.createEl('button', { 
         text: 'Stop syncing',
       });
-      stopButton.addEventListener('click', async () => {
-        await this.plugin.stopSync();
+      stopButton.addEventListener('click', () => {
+        void this.plugin.stopSync();
       });
     } else {
       const syncButtonText = this.plugin.settings.hasCompletedFirstSync ? 'Sync now' : 'Start syncing';
@@ -164,8 +152,8 @@ export class SnipdSettingModal extends PluginSettingTab {
         text: syncButtonText,
         cls: 'mod-cta'
       });
-      syncButton.addEventListener('click', async () => {
-        await this.plugin.syncSnipd();
+      syncButton.addEventListener('click', () => {
+        void this.plugin.syncSnipd();
       });
     }
 
@@ -226,7 +214,8 @@ export class SnipdSettingModal extends PluginSettingTab {
       });
     }
 
-    containerEl.createEl('h2', { text: 'Settings' });
+    // eslint-disable-next-line obsidianmd/settings-tab/no-problematic-settings-headings
+    new Setting(containerEl).setName("General").setHeading();
 
     new Setting(containerEl)
       .setName('Base folder')
@@ -258,7 +247,7 @@ export class SnipdSettingModal extends PluginSettingTab {
           this.plugin.settings.frequency = newValue;
           await this.plugin.saveSettings();
           if (this.plugin.settings.hasCompletedFirstSync) {
-            this.plugin.configureSchedule();
+            void this.plugin.configureSchedule();
           }
         });
       });
@@ -311,24 +300,24 @@ export class SnipdSettingModal extends PluginSettingTab {
         } else {
           button.setButtonText("Test sync");
           button.onClick(async () => {
-            await this.plugin.testSyncRandomEpisodes();
+            void this.plugin.testSyncRandomEpisodes();
           });
         }
       });
 
     if (this.refreshInterval !== null) {
-      window.clearInterval(this.refreshInterval);
+      globalThis.window.clearInterval(this.refreshInterval);
       this.refreshInterval = null;
     }
 
     if (this.plugin.settings.isSyncing || this.plugin.settings.isTestSyncing) {
-      this.refreshInterval = window.setInterval(() => {
+      this.refreshInterval = globalThis.window.setInterval(() => {
         this.display();
       }, 1000);
     }
 
     if (isDev()) {
-      containerEl.createEl('h2', { text: 'DEV options' });
+      new Setting(containerEl).setName("Development").setHeading();
 
       new Setting(containerEl)
         .setName('Save debug zips')
@@ -346,8 +335,7 @@ export class SnipdSettingModal extends PluginSettingTab {
         .setDesc('Remove all existing settings state (basically revert to the initial state when the plugin is installed)')
         .addButton((button) => {
           button.setButtonText('Reset');
-          button.buttonEl.style.backgroundColor = '#e74c3c';
-          button.buttonEl.style.color = 'white';
+          button.buttonEl.addClass('snipd-reset-button');
           button.onClick(async () => {
             this.plugin.settings = Object.assign({}, DEFAULT_SETTINGS);
             await this.plugin.saveSettings();
