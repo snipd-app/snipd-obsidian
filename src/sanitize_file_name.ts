@@ -1,9 +1,9 @@
-import * as path from 'path';
-
 export const OBSIDIAN_ILLEGAL_SYMBOLS = ['[', ']', '#', '^', '|', ':', '\\', '/'];
 
+const WINDOWS_CONTROL_CHARACTERS = Array.from({ length: 31 }, (_, i) => String.fromCharCode(i + 1));
+
 export const PLATFORM_ILLEGAL_SYMBOLS: Record<string, string[]> = {
-  win32: ['<', '>', ':', '"', '/', '\\', '|', '?', '*', '\0'],
+  win32: ['<', '>', ':', '"', '/', '\\', '|', '?', '*', '\0', ...WINDOWS_CONTROL_CHARACTERS],
   darwin: ['/', ':', '\0'],
   linux: ['/', '\0'],
 };
@@ -25,9 +25,14 @@ function escapeForRegexCharacterClass(char: string): string {
   return char;
 }
 
+function removeTrailingPeriodsAndSpaces(name: string): string {
+  return name.replace(/[.\s]+$/, '');
+}
+
 /// Sanitizes file names by replacing illegal characters with underscores and truncating length.
 /// Uses a simple, deterministic approach to ensure consistent results across platforms and
 /// avoid edge cases that could cause file system errors.
+/// Includes Windows-specific fixes for trailing periods/spaces.
 export function sanitizeFileName(
   name: string,
   illegalSymbols: string[] = DEFAULT_ILLEGAL_SYMBOLS,
@@ -39,17 +44,19 @@ export function sanitizeFileName(
   
   const escapedSymbols = illegalSymbols.map(escapeForRegexCharacterClass).join('');
   
-  const extensionPart = path.extname(name);
-  const namePart = extensionPart ? name.slice(0, -extensionPart.length) : name;
-  let sanitized = namePart.replace(new RegExp(`[${escapedSymbols}]`, 'g'), '_').trim();
+  let sanitized = name.replace(new RegExp(`[${escapedSymbols}]`, 'g'), '_').trim();
+  
+  sanitized = removeTrailingPeriodsAndSpaces(sanitized);
+  
   if (sanitized.length > maxLength) {
-    sanitized = sanitized.slice(0, maxLength).trim();
+    sanitized = sanitized.slice(0, maxLength);
+    sanitized = removeTrailingPeriodsAndSpaces(sanitized);
   }
   
   if (!sanitized) {
     return 'untitled';
   }
   
-  return sanitized + extensionPart;
+  return sanitized;
 }
 
