@@ -128,7 +128,7 @@ export default class SnipdPlugin extends Plugin {
   }
 
   async syncSnipd() {
-    if (!(await this.validateSyncPreconditions())) {
+    if (!this.validateSyncPreconditions()) {
       return;
     }
 
@@ -150,7 +150,7 @@ export default class SnipdPlugin extends Plugin {
     await this.finalizeSync(stats.episodeCount, stats.snipCount);
   }
 
-  private async validateSyncPreconditions(): Promise<boolean> {
+  private validateSyncPreconditions(): boolean {
     if (this.settings.isSyncing) {
       this.notice("Snipd sync already in progress", true);
       return false;
@@ -1030,7 +1030,7 @@ export default class SnipdPlugin extends Plugin {
     }
   }
 
-  async configureSchedule() {
+  configureSchedule() {
     const minutes = parseInt(this.settings.frequency);
     const milliseconds = minutes * 60 * 1000;
     debugLog('Snipd plugin: setting interval to ', milliseconds, 'milliseconds');
@@ -1141,7 +1141,7 @@ export default class SnipdPlugin extends Plugin {
       }
 
       if (this.settings.hasCompletedFirstSync) {
-        await this.configureSchedule();
+        this.configureSchedule();
       }
     });
   }

@@ -3,15 +3,12 @@ import { EpisodeEntityData, SnipdPluginSettings, DEFAULT_EPISODE_FILE_NAME_TEMPL
 import { sanitizeFileName } from './sanitize_file_name';
 
 export const isDev = (): boolean => {
-  // In Obsidian plugin context, check for development mode differently
-  // Since process.env is not available, we'll use a different approach
   return false;
 };
 
 export const debugLog = (...args: unknown[]): void => {
   if (isDev()) {
-    // eslint-disable-next-line no-undef
-    console.debug(...args);
+    globalThis.console.debug(...args);
   }
 };
 

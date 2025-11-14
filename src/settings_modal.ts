@@ -1,4 +1,4 @@
-import { App, Notice, normalizePath, PluginSettingTab, Setting, Platform, requestUrl } from 'obsidian';
+import { App, Notice, normalizePath, PluginSettingTab, Setting, requestUrl } from 'obsidian';
 import type SnipdPlugin from './main';
 import { FormattingConfigModal } from './formatting_modal';
 import { DEFAULT_SETTINGS } from './types';
@@ -30,16 +30,9 @@ export class SnipdSettingModal extends PluginSettingTab {
     });
   }
 
-  openExternal(url: string) {
-    if (!Platform.isDesktopApp) {
-      globalThis.window.open(url);
-      return;
-    }
-
-    // Desktop: use Electron shell
-    // eslint-disable-next-line @typescript-eslint/no-require-imports, no-undef
-    const electron = require("electron") as { shell: { openExternal: (url: string) => void } };
-    electron.shell.openExternal(url);
+  // Cannot use electron API in Obsidian
+  async openExternal(url: string) {
+    globalThis.window.open(url);
   }
 
   async connectToSnipd(button: HTMLElement, container: HTMLElement, uuid?: string): Promise<void> {
@@ -49,7 +42,7 @@ export class SnipdSettingModal extends PluginSettingTab {
 
     container.empty();
     container.addClass('snipd-hidden');
-    this.openExternal(`${AUTH_URL}?uuid=${uuid}`);
+    await this.openExternal(`${AUTH_URL}?uuid=${uuid}`);
 
     let response;
     let data: { token?: string };
@@ -108,7 +101,7 @@ export class SnipdSettingModal extends PluginSettingTab {
 
     containerEl.empty();
     ;
-    containerEl.createEl('p', { text: 'Sync your Snipd content to Obsidian' });
+    containerEl.createEl('p', { text: 'Sync your Snipd content to you Obsidian vault' });
 
     if (!this.plugin.settings.apiKey) {
       const authSection = containerEl.createDiv({ cls: 'snipd-auth-section' });
@@ -214,8 +207,7 @@ export class SnipdSettingModal extends PluginSettingTab {
       });
     }
 
-    // eslint-disable-next-line obsidianmd/settings-tab/no-problematic-settings-headings
-    new Setting(containerEl).setName("General").setHeading();
+    ;
 
     new Setting(containerEl)
       .setName('Base folder')
@@ -299,7 +291,7 @@ export class SnipdSettingModal extends PluginSettingTab {
           button.setDisabled(true);
         } else {
           button.setButtonText("Test sync");
-          button.onClick(async () => {
+          button.onClick(() => {
             void this.plugin.testSyncRandomEpisodes();
           });
         }

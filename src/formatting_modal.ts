@@ -1,4 +1,4 @@
-import { App, Modal, Notice, Platform } from 'obsidian';
+import { App, Modal, Notice } from 'obsidian';
 import type SnipdPlugin from './main';
 import { DEFAULT_EPISODE_TEMPLATE, DEFAULT_SNIP_TEMPLATE, DEFAULT_EPISODE_FILE_NAME_TEMPLATE } from './types';
 
@@ -26,7 +26,7 @@ export class FormattingConfigModal extends Modal {
     
     scrollableContent.createEl('h2', { text: 'Custom formatting' });
     scrollableContent.createEl('p', { 
-      text: 'Configure how your episodes and snips are formatted in Obsidian.',
+      text: 'Configure how your episodes and snips are formatted.',
       cls: 'setting-item-description'
     });
     
@@ -55,18 +55,12 @@ export class FormattingConfigModal extends Modal {
       const varSpan = fileNameVarsDesc.createSpan({ cls: 'snipd-template-variable', text: varName });
       varSpan.addEventListener('click', () => {
         void (async () => {
-          if (Platform.isDesktopApp) {
+          try {
             await globalThis.navigator.clipboard.writeText(varName);
-          } else {
-            const textArea = globalThis.document.createElement('textarea');
-            textArea.value = varName;
-            globalThis.document.body.appendChild(textArea);
-            textArea.select();
-            // eslint-disable-next-line @typescript-eslint/no-deprecated
-            globalThis.document.execCommand('copy');
-            globalThis.document.body.removeChild(textArea);
+            new Notice(`Copied ${varName} to clipboard`);
+          } catch {
+            new Notice(`Failed to copy ${varName} to clipboard`);
           }
-          new Notice(`Copied ${varName} to clipboard`);
         })();
       });
       if (index < fileNameVars.length - 1) {
@@ -107,18 +101,12 @@ export class FormattingConfigModal extends Modal {
       const varSpan = episodeVarsDesc.createSpan({ cls: 'snipd-template-variable', text: varName });
       varSpan.addEventListener('click', () => {
         void (async () => {
-          if (Platform.isDesktopApp) {
+          try {
             await globalThis.navigator.clipboard.writeText(varName);
-          } else {
-            const textArea = globalThis.document.createElement('textarea');
-            textArea.value = varName;
-            globalThis.document.body.appendChild(textArea);
-            textArea.select();
-            // eslint-disable-next-line @typescript-eslint/no-deprecated
-            globalThis.document.execCommand('copy');
-            globalThis.document.body.removeChild(textArea);
+            new Notice(`Copied ${varName} to clipboard`);
+          } catch {
+            new Notice(`Failed to copy ${varName} to clipboard`);
           }
-          new Notice(`Copied ${varName} to clipboard`);
         })();
       });
       if (index < episodeVars.length - 1) {
@@ -156,18 +144,12 @@ export class FormattingConfigModal extends Modal {
       const varSpan = snipVarsDesc.createSpan({ cls: 'snipd-template-variable', text: varName });
       varSpan.addEventListener('click', () => {
         void (async () => {
-          if (Platform.isDesktopApp) {
+          try {
             await globalThis.navigator.clipboard.writeText(varName);
-          } else {
-            const textArea = globalThis.document.createElement('textarea');
-            textArea.value = varName;
-            globalThis.document.body.appendChild(textArea);
-            textArea.select();
-            // eslint-disable-next-line @typescript-eslint/no-deprecated
-            globalThis.document.execCommand('copy');
-            globalThis.document.body.removeChild(textArea);
+            new Notice(`Copied ${varName} to clipboard`);
+          } catch {
+            new Notice(`Failed to copy ${varName} to clipboard`);
           }
-          new Notice(`Copied ${varName} to clipboard`);
         })();
       });
       if (index < snipVars.length - 1) {
