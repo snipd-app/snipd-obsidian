@@ -2,6 +2,9 @@ export interface SnipdPluginSettings {
   apiKey: string;
   encryptedApiKey: string;
   snipdDir: string;
+  baseFolder: string;
+  baseFilePath: string;
+  pageFolder: string;
   frequency: string;
   triggerOnLoad: boolean;
   isSyncing: boolean;
@@ -60,17 +63,21 @@ export const DEFAULT_SNIP_TEMPLATE = `### {{snip_favorite_star}} [{{snip_title}}
 {{snip_quote}}[[#### 💬 Quote]]
 
 {{snip_transcript}}[[#### 📚 Transcript]]
-
 ---
 
 `;
 
 export const DEFAULT_EPISODE_FILE_NAME_TEMPLATE = `{{episode_title}}`;
 
+export const DEFAULT_BASE_FILE_PATH = 'Base/Snipd.base';
+
 export const DEFAULT_SETTINGS: SnipdPluginSettings = {
   apiKey: "",
   encryptedApiKey: "",
   snipdDir: "Snipd",
+  baseFolder: "Snipd",
+  baseFilePath: DEFAULT_BASE_FILE_PATH,
+  pageFolder: "",
   frequency: "0",
   triggerOnLoad: true,
   isSyncing: false,

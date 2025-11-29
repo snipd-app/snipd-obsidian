@@ -40,6 +40,12 @@ You can download it [here](https://www.snipd.com).
 5. Optionally customize your template
 6. Click "Start syncing" to start your first sync
 
+## Base file & folders
+
+- **Base folder**: Root folder where the Base and metadata are stored (default `Snipd`).
+- **Base file path**: Relative to the base folder; default `Base/Snipd.base`. Set this to place/rename the Base file, e.g. `Bases/Podcasts.base` → `Snipd/Bases/Podcasts.base`.
+- **Episode pages folder**: Where Markdown pages go. Leave empty to use `<base folder>/Data`, or set an explicit path (e.g. `Snipd/Podcasts`) to store pages under that folder (e.g. `Snipd/Podcasts/{show}/{episode}.md`).
+
 ## Custom Formatting
 
 Inside the plugin's settings, go to "Custom formatting" and click "Configure":

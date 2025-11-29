@@ -184,3 +184,25 @@ If your plugin does not need CSS, delete this file.
   background-color: #e74c3c !important;
   color: white !important;
 }
+
+.snipd-sync-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.snipd-secondary-button {
+  font-size: 12px;
+  padding: 4px 10px;
+  background-color: var(--background-modifier-border);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-normal);
+}
+
+.snipd-secondary-button:hover {
+  background-color: var(--background-modifier-hover);
+}
