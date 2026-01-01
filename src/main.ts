@@ -382,7 +382,10 @@ export default class SnipdPlugin extends Plugin {
       
       if (metadata.episode_batch_count > 0) {
         this.setStatusBarPersistentMessage(`Syncing ${metadata.episode_batch_count} batch${metadata.episode_batch_count > 1 ? 'es' : ''}...`);
-        await this.fetchAndSaveBaseFile(this.settings.snipdDir);
+        const baseFileSuccess = await this.fetchAndSaveBaseFile(this.settings.snipdDir);
+        if (!baseFileSuccess) {
+          debugLog('Snipd plugin: base file sync failed, continuing with episode sync');
+        }
       }
       
       return metadata;
@@ -986,7 +989,7 @@ export default class SnipdPlugin extends Plugin {
     }
   }
 
-  async fetchAndSaveBaseFile(folderPath: string): Promise<void> {
+  async fetchAndSaveBaseFile(folderPath: string): Promise<boolean> {
     this.settings.baseFileManualOverrides = this.settings.baseFileManualOverrides || {};
     const manualOverrides = this.settings.baseFileManualOverrides;
     const existingHashes = { ...(this.settings.baseFileHashes || {}) };
@@ -997,31 +1000,27 @@ export default class SnipdPlugin extends Plugin {
     const filesInZip = new Set<string>();
     try {
       debugLog('Snipd plugin: fetching base file...');
-      
-      const requestOptions: {
-        url: string;
-        method: string;
-        headers: Record<string, string>;
-        body?: string;
-      } = {
+
+      const additionalProps = this.settings.additionalProperties;
+      const requestBody: { additional_properties?: Array<{ name: string; template: string; displayName?: string }> } = {};
+
+      if (isValidAdditionalProperties(additionalProps)) {
+        requestBody.additional_properties = additionalProps.map((prop) => ({
+          name: prop.name.trim(),
+          template: prop.template.trim(),
+          ...(prop.displayName?.trim() ? { displayName: prop.displayName.trim() } : {}),
+        }));
+      }
+
+      const requestOptions = {
         url: `${API_BASE_URL}/obsidian/export-base-file`,
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${this.settings.apiKey}`,
+          'Content-Type': 'application/json',
         },
+        body: JSON.stringify(requestBody),
       };
-
-      const additionalProps = this.settings.additionalProperties;
-      if (isValidAdditionalProperties(additionalProps)) {
-        requestOptions.headers['Content-Type'] = 'application/json';
-        requestOptions.body = JSON.stringify({
-          additional_properties: additionalProps.map((prop) => ({
-            name: prop.name.trim(),
-            template: prop.template.trim(),
-            ...(prop.displayName?.trim() ? { displayName: prop.displayName.trim() } : {}),
-          })),
-        });
-      }
 
       const response = await requestUrl(requestOptions);
 
@@ -1029,7 +1028,8 @@ export default class SnipdPlugin extends Plugin {
         debugLog("Snipd plugin: bad response for base file: ", response);
         const errorMsg = this.formatApiErrorMessage(null, response, "Base file sync");
         debugLog(`Snipd plugin: ${errorMsg}`);
-        return;
+        this.notice(errorMsg, true);
+        return false;
       }
 
       const arrayBuffer = response.arrayBuffer;
@@ -1115,6 +1115,17 @@ export default class SnipdPlugin extends Plugin {
       const errorResponse = this.extractResponseFromError(e);
       const errorMsg = this.formatApiErrorMessage(e, errorResponse, "Base file sync");
       debugLog(`Snipd plugin: ${errorMsg}`);
+      this.notice(errorMsg, true);
+      // Persist state for any files already processed before the error
+      if (updatedFileCount > 0 || removedFileCount > 0 || baseFileMetadata) {
+        this.settings.baseFileHashes = existingHashes;
+        this.settings.baseFileManualOverrides = manualOverrides;
+        if (baseFileMetadata) {
+          this.settings.baseFileDefaultOpenPath = baseFileMetadata.defaultOpenPath;
+        }
+        await this.saveSettings();
+      }
+      return false;
     } finally {
       if (zipReader) {
         try {
@@ -1134,37 +1145,35 @@ export default class SnipdPlugin extends Plugin {
       }
       await this.saveSettings();
     }
+
+    return true;
   }
 
   async fetchAndSaveBaseFileForTest(folderPath: string): Promise<void> {
     let zipReader: zip.ZipReader<zip.BlobReader> | null = null;
     try {
       debugLog('Snipd plugin: fetching base file for test sync...');
-      
-      const requestOptions: {
-        url: string;
-        method: string;
-        headers: Record<string, string>;
-        body?: string;
-      } = {
+
+      const additionalProps = this.settings.additionalProperties;
+      const requestBody: { additional_properties?: Array<{ name: string; template: string; displayName?: string }> } = {};
+
+      if (isValidAdditionalProperties(additionalProps)) {
+        requestBody.additional_properties = additionalProps.map((prop) => ({
+          name: prop.name.trim(),
+          template: prop.template.trim(),
+          ...(prop.displayName?.trim() ? { displayName: prop.displayName.trim() } : {}),
+        }));
+      }
+
+      const requestOptions = {
         url: `${API_BASE_URL}/obsidian/export-base-file`,
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${this.settings.apiKey}`,
+          'Content-Type': 'application/json',
         },
+        body: JSON.stringify(requestBody),
       };
-
-      const additionalProps = this.settings.additionalProperties;
-      if (isValidAdditionalProperties(additionalProps)) {
-        requestOptions.headers['Content-Type'] = 'application/json';
-        requestOptions.body = JSON.stringify({
-          additional_properties: additionalProps.map((prop) => ({
-            name: prop.name.trim(),
-            template: prop.template.trim(),
-            ...(prop.displayName?.trim() ? { displayName: prop.displayName.trim() } : {}),
-          })),
-        });
-      }
 
       const response = await requestUrl(requestOptions);
 
@@ -1264,11 +1273,15 @@ export default class SnipdPlugin extends Plugin {
       
       if (!defaultOpenPath) {
         this.notice('Base file not found, fetching...', true);
-        await this.fetchAndSaveBaseFile(this.settings.snipdDir);
+        const success = await this.fetchAndSaveBaseFile(this.settings.snipdDir);
+        if (!success) {
+          this.notice('Unable to fetch base file. Please try syncing your snips first.', true);
+          return;
+        }
         defaultOpenPath = this.settings.baseFileDefaultOpenPath;
       }
     }
-    
+
     if (!defaultOpenPath) {
       defaultOpenPath = 'Base/Snipd.base';
     }
