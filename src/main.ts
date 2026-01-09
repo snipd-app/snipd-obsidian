@@ -380,8 +380,10 @@ export default class SnipdPlugin extends Plugin {
 
       debugLog(`Snipd plugin: fetched metadata with ${metadata.episode_batch_count} batches`);
       
-      if (metadata.episode_batch_count > 0) {
-        this.setStatusBarPersistentMessage(`Syncing ${metadata.episode_batch_count} batch${metadata.episode_batch_count > 1 ? 'es' : ''}...`);
+      if (metadata.episode_batch_count > 0 || !this.settings.baseFileDefaultOpenPath) {
+        if (metadata.episode_batch_count > 0) {
+          this.setStatusBarPersistentMessage(`Syncing ${metadata.episode_batch_count} batch${metadata.episode_batch_count > 1 ? 'es' : ''}...`);
+        }
         await this.fetchAndSaveBaseFile(this.settings.snipdDir);
       }
       
@@ -1115,6 +1117,7 @@ export default class SnipdPlugin extends Plugin {
       const errorResponse = this.extractResponseFromError(e);
       const errorMsg = this.formatApiErrorMessage(e, errorResponse, "Base file sync");
       debugLog(`Snipd plugin: ${errorMsg}`);
+      this.notice(errorMsg, true, 4, false);
     } finally {
       if (zipReader) {
         try {
@@ -1133,6 +1136,9 @@ export default class SnipdPlugin extends Plugin {
         this.settings.baseFileDefaultOpenPath = baseFileMetadata.defaultOpenPath;
       }
       await this.saveSettings();
+      debugLog(`Snipd plugin: base file sync completed - ${updatedFileCount} files updated, ${removedFileCount} removed`);
+    } else {
+      debugLog('Snipd plugin: base file sync completed but no files were updated');
     }
   }
 
