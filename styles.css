@@ -186,6 +186,7 @@ If your plugin does not need CSS, delete this file.
 
 .snipd-auth-heading {
   margin-top: 0;
+  font-weight: 600;
 }
 
 .snipd-reset-button {

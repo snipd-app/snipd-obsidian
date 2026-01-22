@@ -8,7 +8,7 @@ export const isDev = (): boolean => {
 
 export const debugLog = (...args: unknown[]): void => {
   if (isDev()) {
-    globalThis.console.debug(...args);
+    globalThis.console.log('[Snipd]', ...args);
   }
 };
 

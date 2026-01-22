@@ -105,8 +105,7 @@ export class SnipdSettingModal extends PluginSettingTab {
 
     if (!this.plugin.settings.apiKey) {
       const authSection = containerEl.createDiv({ cls: 'snipd-auth-section' });
-      const title = new Setting(authSection).setName("Connect Obsidian to Snipd").setHeading();
-      title.settingEl.addClass('snipd-auth-heading');
+      authSection.createEl('div', { text: 'Connect Obsidian to Snipd', cls: 'snipd-auth-heading' });
       
       const subtitleRow = authSection.createDiv({ cls: 'snipd-auth-subtitle-row' });
       
