@@ -56,6 +56,8 @@ export const DEFAULT_SNIP_TEMPLATE = `### {{snip_favorite_star}} [{{snip_title}}
 
 🎧 {{snip_start_time}} - {{snip_end_time}} ({{snip_duration}})
 
+{{snip_audio_player}}
+
 {{snip_note}}
 
 {{snip_quote}}[[#### 💬 Quote]]

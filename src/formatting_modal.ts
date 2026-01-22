@@ -171,7 +171,8 @@ export class FormattingConfigModal extends Modal {
       '{{snip_duration}}',
       '{{snip_note}}',
       '{{snip_quote}}',
-      '{{snip_transcript}}'
+      '{{snip_transcript}}',
+      '{{snip_audio_player}}'
     ];
     snipVars.forEach((varName, index) => {
       const varSpan = snipVarsDesc.createSpan({ cls: 'snipd-template-variable', text: varName });
