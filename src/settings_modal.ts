@@ -2,7 +2,7 @@ import { App, Notice, normalizePath, PluginSettingTab, Setting, requestUrl } fro
 import type SnipdPlugin from './main';
 import { FormattingConfigModal } from './formatting_modal';
 import { DEFAULT_SETTINGS } from './types';
-import { isDev, debugLog } from './utils';
+import { isDev, debugLog, formatSyncCounts } from './utils';
 import { API_BASE_URL, AUTH_URL } from './main';
 
 export class SnipdSettingModal extends PluginSettingTab {
@@ -145,13 +145,33 @@ export class SnipdSettingModal extends PluginSettingTab {
         cls: 'mod-cta'
       });
       syncButton.addEventListener('click', () => {
-        void this.plugin.syncSnipd();
+        void this.plugin.syncSnipd({ force: true });
       });
     }
 
     const syncStatusBody = syncStatusContainer.createDiv({ cls: 'snipd-sync-status-body' });
 
-    if (this.plugin.settings.isSyncing) {
+    const transcriptProgress = this.plugin.transcriptSyncProgress;
+    if (this.plugin.settings.isSyncing && transcriptProgress?.phase === 'checking') {
+      syncStatusBody.createDiv({
+        text: `Checking transcripts for ${transcriptProgress.episodeCount} episode${transcriptProgress.episodeCount !== 1 ? 's' : ''}...`,
+        cls: 'snipd-sync-status-text'
+      });
+    } else if (this.plugin.settings.isSyncing && transcriptProgress?.phase === 'exporting') {
+      const { batchIndex, totalBatches, episodeCount } = transcriptProgress;
+      syncStatusBody.createDiv({
+        text: `Syncing transcripts: Batch ${batchIndex + 1} of ${totalBatches} (${totalBatches - batchIndex} remaining)`,
+        cls: 'snipd-sync-status-text'
+      });
+      syncStatusBody.createDiv({
+        text: `Current batch: ${episodeCount} episode${episodeCount !== 1 ? 's' : ''}`,
+        cls: 'snipd-sync-status-text'
+      });
+      syncStatusBody.createDiv({
+        text: `Progress: ${Math.round((batchIndex / totalBatches) * 100)}%`,
+        cls: 'snipd-sync-status-text'
+      });
+    } else if (this.plugin.settings.isSyncing) {
       if (this.plugin.settings.current_export_total_batches > 0) {
         const currentBatch = this.plugin.settings.current_export_batch_index;
         const totalBatches = this.plugin.settings.current_export_total_batches;
@@ -193,9 +213,14 @@ export class SnipdSettingModal extends PluginSettingTab {
         cls: 'snipd-sync-status-text'
       });
       
-      if (this.plugin.settings.lastSyncEpisodeCount > 0 || this.plugin.settings.lastSyncSnipCount > 0) {
+      const lastSyncSummary = formatSyncCounts(
+        this.plugin.settings.lastSyncEpisodeCount,
+        this.plugin.settings.lastSyncSnipCount,
+        this.plugin.settings.lastSyncTranscriptCount,
+      );
+      if (lastSyncSummary) {
         syncStatusBody.createDiv({ 
-          text: `Last synced: ${this.plugin.settings.lastSyncEpisodeCount} episodes, ${this.plugin.settings.lastSyncSnipCount} snips`,
+          text: `Last synced: ${lastSyncSummary}`,
           cls: 'snipd-sync-status-text'
         });
       }
@@ -261,6 +286,17 @@ export class SnipdSettingModal extends PluginSettingTab {
         toggle.setValue(this.plugin.settings.onlyEditedSnips);
         toggle.onChange(async (val) => {
           this.plugin.settings.onlyEditedSnips = val;
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("Sync full episode transcripts")
+      .setDesc("Sync full episode transcripts for snipped episodes you have listened to or exported in the Snipd app")
+      .addToggle((toggle) => {
+        toggle.setValue(this.plugin.settings.syncTranscripts);
+        toggle.onChange(async (val) => {
+          this.plugin.settings.syncTranscripts = val;
           await this.plugin.saveSettings();
         });
       });
