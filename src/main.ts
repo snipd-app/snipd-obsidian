@@ -1010,12 +1010,13 @@ export default class SnipdPlugin extends Plugin {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${this.settings.apiKey}`,
+          'Content-Type': 'application/json',
         },
+        body: JSON.stringify({}),
       };
 
       const additionalProps = this.settings.additionalProperties;
       if (isValidAdditionalProperties(additionalProps)) {
-        requestOptions.headers['Content-Type'] = 'application/json';
         requestOptions.body = JSON.stringify({
           additional_properties: additionalProps.map((prop) => ({
             name: prop.name.trim(),
@@ -1157,12 +1158,13 @@ export default class SnipdPlugin extends Plugin {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${this.settings.apiKey}`,
+          'Content-Type': 'application/json',
         },
+        body: JSON.stringify({}),
       };
 
       const additionalProps = this.settings.additionalProperties;
       if (isValidAdditionalProperties(additionalProps)) {
-        requestOptions.headers['Content-Type'] = 'application/json';
         requestOptions.body = JSON.stringify({
           additional_properties: additionalProps.map((prop) => ({
             name: prop.name.trim(),
