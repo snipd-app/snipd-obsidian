@@ -87,7 +87,7 @@ export class FormattingConfigModal extends Modal {
       varSpan.addEventListener('click', () => {
         void (async () => {
           try {
-            await globalThis.navigator.clipboard.writeText(varName);
+            await activeWindow.navigator.clipboard.writeText(varName);
             new Notice(`Copied ${varName} to clipboard`);
           } catch {
             new Notice(`Failed to copy ${varName} to clipboard`);
@@ -133,7 +133,7 @@ export class FormattingConfigModal extends Modal {
       varSpan.addEventListener('click', () => {
         void (async () => {
           try {
-            await globalThis.navigator.clipboard.writeText(varName);
+            await activeWindow.navigator.clipboard.writeText(varName);
             new Notice(`Copied ${varName} to clipboard`);
           } catch {
             new Notice(`Failed to copy ${varName} to clipboard`);
@@ -179,7 +179,7 @@ export class FormattingConfigModal extends Modal {
       varSpan.addEventListener('click', () => {
         void (async () => {
           try {
-            await globalThis.navigator.clipboard.writeText(varName);
+            await activeWindow.navigator.clipboard.writeText(varName);
             new Notice(`Copied ${varName} to clipboard`);
           } catch {
             new Notice(`Failed to copy ${varName} to clipboard`);
@@ -213,7 +213,7 @@ export class FormattingConfigModal extends Modal {
       varSpan.addEventListener('click', () => {
         void (async () => {
           try {
-            await globalThis.navigator.clipboard.writeText(varName);
+            await activeWindow.navigator.clipboard.writeText(varName);
             new Notice(`Copied ${varName} to clipboard`);
           } catch {
             new Notice(`Failed to copy ${varName} to clipboard`);

@@ -184,7 +184,7 @@ export default class SnipdPlugin extends Plugin {
 
   private clearStatusBarPersistentMessageAfterDelay(delayMs: number): void {
     this.registerInterval(
-      globalThis.window.setTimeout(() => {
+      activeWindow.setTimeout(() => {
         this.clearStatusBarPersistentMessage();
       }, delayMs)
     );
@@ -1239,13 +1239,13 @@ export default class SnipdPlugin extends Plugin {
     const milliseconds = minutes * 60 * 1000;
     debugLog('Snipd plugin: setting interval to ', milliseconds, 'milliseconds');
     if (this.scheduleInterval !== null) {
-      globalThis.window.clearInterval(this.scheduleInterval);
+      activeWindow.clearInterval(this.scheduleInterval);
       this.scheduleInterval = null;
     }
     if (!milliseconds) {
       return;
     }
-    this.scheduleInterval = globalThis.window.setInterval(() => {
+    this.scheduleInterval = activeWindow.setInterval(() => {
       void this.syncSnipd();
     }, milliseconds);
     this.registerInterval(this.scheduleInterval);
@@ -1304,7 +1304,7 @@ export default class SnipdPlugin extends Plugin {
     if (!this.app.isMobile) {
       this.statusBar = new StatusBar(this.addStatusBarItem());
       this.registerInterval(
-        globalThis.window.setInterval(() => {
+        activeWindow.setInterval(() => {
           this.statusBar.display();
         }, 1000)
       );

@@ -14,6 +14,11 @@ export default defineConfig([
     languageOptions: {
       parser: tsparser,
       parserOptions: { project: "./tsconfig.json" },
+      globals: {
+        activeWindow: "readonly",
+        activeDocument: "readonly",
+        console: "readonly",
+      },
     },
 
     // Optional project overrides

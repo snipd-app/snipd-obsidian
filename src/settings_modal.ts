@@ -16,7 +16,7 @@ export class SnipdSettingModal extends PluginSettingTab {
 
   hide() {
     if (this.refreshInterval !== null) {
-      globalThis.window.clearInterval(this.refreshInterval);
+      activeWindow.clearInterval(this.refreshInterval);
       this.refreshInterval = null;
     }
     this.plugin.settingsTab = null;
@@ -32,7 +32,7 @@ export class SnipdSettingModal extends PluginSettingTab {
 
   // Cannot use electron API in Obsidian
   openExternal(url: string) {
-    globalThis.window.open(url);
+    activeWindow.open(url);
   }
 
   async connectToSnipd(button: HTMLElement, container: HTMLElement, uuid?: string): Promise<void> {
@@ -105,7 +105,7 @@ export class SnipdSettingModal extends PluginSettingTab {
 
     if (!this.plugin.settings.apiKey) {
       const authSection = containerEl.createDiv({ cls: 'snipd-auth-section' });
-      authSection.createEl('div', { text: 'Connect Obsidian to Snipd', cls: 'snipd-auth-heading' });
+      authSection.createDiv({ text: 'Connect Obsidian to Snipd', cls: 'snipd-auth-heading' });
       
       const subtitleRow = authSection.createDiv({ cls: 'snipd-auth-subtitle-row' });
       
@@ -129,7 +129,7 @@ export class SnipdSettingModal extends PluginSettingTab {
     const syncStatusContainer = containerEl.createDiv({ cls: 'snipd-sync-status' });
     
     const syncStatusHeader = syncStatusContainer.createDiv({ cls: 'snipd-sync-status-header' });
-    syncStatusHeader.createEl('div', { text: 'Sync status', cls: 'snipd-sync-status-title' });
+    syncStatusHeader.createDiv({ text: 'Sync status', cls: 'snipd-sync-status-title' });
     
     if (this.plugin.settings.isSyncing) {
       const stopButton = syncStatusHeader.createEl('button', { 
@@ -162,24 +162,24 @@ export class SnipdSettingModal extends PluginSettingTab {
         const episodeCount = this.plugin.settings.current_batch_episode_count;
         const snipCount = this.plugin.settings.current_batch_snip_count;
         
-        syncStatusBody.createEl('div', { 
+        syncStatusBody.createDiv({ 
           text: `Syncing: Batch ${displayBatch} of ${totalBatches} (${remainingBatches} remaining)`,
           cls: 'snipd-sync-status-text'
         });
         
         if (episodeCount > 0 || snipCount > 0) {
-          syncStatusBody.createEl('div', { 
+          syncStatusBody.createDiv({ 
             text: `Current batch: ${episodeCount} episode${episodeCount !== 1 ? 's' : ''}, ${snipCount} snip${snipCount !== 1 ? 's' : ''}`,
             cls: 'snipd-sync-status-text'
           });
         }
         
-        syncStatusBody.createEl('div', { 
+        syncStatusBody.createDiv({ 
           text: `Progress: ${progressPercent}%`,
           cls: 'snipd-sync-status-text'
         });
       } else {
-        syncStatusBody.createEl('div', { 
+        syncStatusBody.createDiv({ 
           text: 'Preparing sync...',
           cls: 'snipd-sync-status-text'
         });
@@ -188,19 +188,19 @@ export class SnipdSettingModal extends PluginSettingTab {
       const lastSyncDate = new Date(this.plugin.settings.lastSyncTimestamp);
       const formattedDate = lastSyncDate.toLocaleString();
       
-      syncStatusBody.createEl('div', { 
+      syncStatusBody.createDiv({ 
         text: `Last sync: ${formattedDate}`,
         cls: 'snipd-sync-status-text'
       });
       
       if (this.plugin.settings.lastSyncEpisodeCount > 0 || this.plugin.settings.lastSyncSnipCount > 0) {
-        syncStatusBody.createEl('div', { 
+        syncStatusBody.createDiv({ 
           text: `Last synced: ${this.plugin.settings.lastSyncEpisodeCount} episodes, ${this.plugin.settings.lastSyncSnipCount} snips`,
           cls: 'snipd-sync-status-text'
         });
       }
     } else {
-      syncStatusBody.createEl('div', { 
+      syncStatusBody.createDiv({ 
         text: 'No sync performed yet',
         cls: 'snipd-sync-status-text'
       });
@@ -304,7 +304,7 @@ export class SnipdSettingModal extends PluginSettingTab {
         button.setButtonText(isBusy ? "Syncing..." : "Reset & sync");
         button.setDisabled(isBusy);
         button.onClick(() => {
-          const confirmed = globalThis.window.confirm(
+          const confirmed = activeWindow.confirm(
             "This will remove all synced Snipd data from your vault and start a fresh sync. Continue?"
           );
           if (!confirmed) {
@@ -320,12 +320,12 @@ export class SnipdSettingModal extends PluginSettingTab {
       });
 
     if (this.refreshInterval !== null) {
-      globalThis.window.clearInterval(this.refreshInterval);
+      activeWindow.clearInterval(this.refreshInterval);
       this.refreshInterval = null;
     }
 
     if (this.plugin.settings.isSyncing || this.plugin.settings.isTestSyncing) {
-      this.refreshInterval = globalThis.window.setInterval(() => {
+      this.refreshInterval = activeWindow.setInterval(() => {
         this.display();
       }, 1000);
     }
