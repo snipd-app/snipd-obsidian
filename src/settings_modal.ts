@@ -16,7 +16,7 @@ export class SnipdSettingModal extends PluginSettingTab {
 
   hide() {
     if (this.refreshInterval !== null) {
-      activeWindow.clearInterval(this.refreshInterval);
+      window.clearInterval(this.refreshInterval);
       this.refreshInterval = null;
     }
     this.plugin.settingsTab = null;
@@ -320,12 +320,12 @@ export class SnipdSettingModal extends PluginSettingTab {
       });
 
     if (this.refreshInterval !== null) {
-      activeWindow.clearInterval(this.refreshInterval);
+      window.clearInterval(this.refreshInterval);
       this.refreshInterval = null;
     }
 
     if (this.plugin.settings.isSyncing || this.plugin.settings.isTestSyncing) {
-      this.refreshInterval = activeWindow.setInterval(() => {
+      this.refreshInterval = window.setInterval(() => {
         this.display();
       }, 1000);
     }

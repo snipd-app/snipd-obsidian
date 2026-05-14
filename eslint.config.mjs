@@ -18,6 +18,12 @@ export default defineConfig([
         activeWindow: "readonly",
         activeDocument: "readonly",
         console: "readonly",
+        window: "readonly",
+        document: "readonly",
+        setTimeout: "readonly",
+        clearTimeout: "readonly",
+        setInterval: "readonly",
+        clearInterval: "readonly",
       },
     },
 
