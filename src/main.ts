@@ -1066,7 +1066,11 @@ export default class SnipdPlugin extends Plugin {
           relativePath = relativePath.substring(6);
         }
         if (relativePath.startsWith('Base/') && this.settings.baseSubDir !== 'Base') {
-          relativePath = relativePath.replace(/^Base\//, `${this.settings.baseSubDir}/`);
+          const replacement = this.settings.baseSubDir ? `${this.settings.baseSubDir}/` : '';
+          relativePath = relativePath.replace(/^Base\//, replacement);
+        }
+        if (relativePath.endsWith('Snipd.base') && this.settings.baseFileName !== 'Snipd.base') {
+          relativePath = relativePath.replace(/Snipd\.base$/, this.settings.baseFileName);
         }
         if (relativePath.toLowerCase() === 'readme.md' && !this.settings.syncReadme) {
           debugLog('Snipd plugin: skipping README.md file - syncReadme setting is disabled.');
@@ -1220,7 +1224,11 @@ export default class SnipdPlugin extends Plugin {
           relativePath = relativePath.substring(6);
         }
         if (relativePath.startsWith('Base/') && this.settings.baseSubDir !== 'Base') {
-          relativePath = relativePath.replace(/^Base\//, `${this.settings.baseSubDir}/`);
+          const replacement = this.settings.baseSubDir ? `${this.settings.baseSubDir}/` : '';
+          relativePath = relativePath.replace(/^Base\//, replacement);
+        }
+        if (relativePath.endsWith('Snipd.base') && this.settings.baseFileName !== 'Snipd.base') {
+          relativePath = relativePath.replace(/Snipd\.base$/, this.settings.baseFileName);
         }
         if (relativePath.toLowerCase() === 'readme.md' && !this.settings.syncReadme) {
           debugLog('Snipd plugin: skipping README.md file - syncReadme setting is disabled.');
@@ -1293,9 +1301,16 @@ export default class SnipdPlugin extends Plugin {
     }
     
     if (!defaultOpenPath) {
-      defaultOpenPath = `${this.settings.baseSubDir}/Snipd.base`;
-    } else if (defaultOpenPath.startsWith('Base/') && this.settings.baseSubDir !== 'Base') {
-      defaultOpenPath = defaultOpenPath.replace(/^Base\//, `${this.settings.baseSubDir}/`);
+      const subDirPart = this.settings.baseSubDir ? `${this.settings.baseSubDir}/` : '';
+      defaultOpenPath = `${subDirPart}${this.settings.baseFileName}`;
+    } else {
+      if (defaultOpenPath.startsWith('Base/') && this.settings.baseSubDir !== 'Base') {
+        const replacement = this.settings.baseSubDir ? `${this.settings.baseSubDir}/` : '';
+        defaultOpenPath = defaultOpenPath.replace(/^Base\//, replacement);
+      }
+      if (defaultOpenPath.endsWith('Snipd.base') && this.settings.baseFileName !== 'Snipd.base') {
+        defaultOpenPath = defaultOpenPath.replace(/Snipd\.base$/, this.settings.baseFileName);
+      }
     }
     
     const baseFilePath = normalizePath(`${this.settings.snipdDir}/${defaultOpenPath}`);

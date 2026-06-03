@@ -32,6 +32,7 @@ export interface SnipdPluginSettings {
   subDir: string;
   baseSubDir: string;
   syncReadme: boolean;
+  baseFileName: string;
 }
 
 export const DEFAULT_EPISODE_TEMPLATE = `# {{episode_title}}
@@ -107,6 +108,7 @@ export const DEFAULT_SETTINGS: SnipdPluginSettings = {
   subDir: "Data",
   baseSubDir: "Base",
   syncReadme: true,
+  baseFileName: "Snipd.base",
 };
 
 export interface MetadataJson {

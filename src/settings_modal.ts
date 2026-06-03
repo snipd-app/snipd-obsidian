@@ -256,6 +256,26 @@ export class SnipdSettingModal extends PluginSettingTab {
         }));
 
     new Setting(containerEl)
+      .setName('Index filename')
+      .setDesc('Filename of the Snipd base index file.')
+      .addText(text => text
+        .setPlaceholder('Snipd.base')
+        .setValue(this.plugin.settings.baseFileName)
+        .onChange(async (value) => {
+          let val = value.trim();
+          if (val) {
+            val = normalizePath(val);
+            if (val === '.') {
+              val = 'Snipd.base';
+            }
+          } else {
+            val = 'Snipd.base';
+          }
+          this.plugin.settings.baseFileName = val;
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
       .setName('Sync README')
       .setDesc('Sync the Snipd README file to the base folder.')
       .addToggle(toggle => toggle
