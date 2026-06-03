@@ -220,6 +220,42 @@ export class SnipdSettingModal extends PluginSettingTab {
         }));
 
     new Setting(containerEl)
+      .setName('Episode subfolder')
+      .setDesc('Folder inside the base folder where podcast episodes will be saved (leave empty to save directly in the base folder).')
+      .addText(text => text
+        .setPlaceholder('Data')
+        .setValue(this.plugin.settings.subDir)
+        .onChange(async (value) => {
+          let val = value.trim();
+          if (val) {
+            val = normalizePath(val);
+            if (val === '.') {
+              val = '';
+            }
+          }
+          this.plugin.settings.subDir = val;
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
+      .setName('Index subfolder')
+      .setDesc('Folder inside the base folder where the Snipd base index file is saved (leave empty to save directly in the base folder).')
+      .addText(text => text
+        .setPlaceholder('Base')
+        .setValue(this.plugin.settings.baseSubDir)
+        .onChange(async (value) => {
+          let val = value.trim();
+          if (val) {
+            val = normalizePath(val);
+            if (val === '.') {
+              val = '';
+            }
+          }
+          this.plugin.settings.baseSubDir = val;
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
       .setName('Sync frequency')
       .setDesc('Automatically sync at the specified interval')
       .addDropdown(dropdown => {

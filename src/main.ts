@@ -924,7 +924,8 @@ export default class SnipdPlugin extends Plugin {
     showName: string,
     totalSnipCount?: number
   ) {
-    const targetPath = normalizePath(`${this.settings.snipdDir}/Data/${showName}/${entityName}.md`);
+    const subDirPart = this.settings.subDir ? `/${this.settings.subDir}` : '';
+    const targetPath = normalizePath(`${this.settings.snipdDir}${subDirPart}/${showName}/${entityName}.md`);
 
     await createDirForFile(targetPath, this.fs);
 
@@ -1063,6 +1064,9 @@ export default class SnipdPlugin extends Plugin {
         let relativePath = zipEntry.filename;
         if (relativePath.startsWith('Files/')) {
           relativePath = relativePath.substring(6);
+        }
+        if (relativePath.startsWith('Base/') && this.settings.baseSubDir !== 'Base') {
+          relativePath = relativePath.replace(/^Base\//, `${this.settings.baseSubDir}/`);
         }
         const baseFilePath = normalizePath(`${folderPath}/${relativePath}`);
         filesInZip.add(baseFilePath);
@@ -1211,6 +1215,9 @@ export default class SnipdPlugin extends Plugin {
         if (relativePath.startsWith('Files/')) {
           relativePath = relativePath.substring(6);
         }
+        if (relativePath.startsWith('Base/') && this.settings.baseSubDir !== 'Base') {
+          relativePath = relativePath.replace(/^Base\//, `${this.settings.baseSubDir}/`);
+        }
         const baseFilePath = normalizePath(`${folderPath}/${relativePath}`);
         
         await createDirForFile(baseFilePath, this.app.vault.adapter);
@@ -1278,7 +1285,9 @@ export default class SnipdPlugin extends Plugin {
     }
     
     if (!defaultOpenPath) {
-      defaultOpenPath = 'Base/Snipd.base';
+      defaultOpenPath = `${this.settings.baseSubDir}/Snipd.base`;
+    } else if (defaultOpenPath.startsWith('Base/') && this.settings.baseSubDir !== 'Base') {
+      defaultOpenPath = defaultOpenPath.replace(/^Base\//, `${this.settings.baseSubDir}/`);
     }
     
     const baseFilePath = normalizePath(`${this.settings.snipdDir}/${defaultOpenPath}`);
