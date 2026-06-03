@@ -240,6 +240,16 @@ export class SnipdSettingModal extends PluginSettingTab {
       });
 
     new Setting(containerEl)
+      .setName('Group episodes into folders')
+      .setDesc('Group episode notes into subfolders named after their podcast shows.')
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.settings.groupFilesIntoFolders)
+        .onChange(async (value) => {
+          this.plugin.settings.groupFilesIntoFolders = value;
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
       .setName('Episode subfolder')
       .setDesc('Folder inside the base folder where podcast episodes will be saved (leave empty to save directly in the base folder).')
       .addText(text => text

@@ -928,7 +928,8 @@ export default class SnipdPlugin extends Plugin {
     totalSnipCount?: number
   ) {
     const subDirPart = this.settings.subDir ? `/${this.settings.subDir}` : '';
-    const targetPath = normalizePath(`${this.settings.snipdDir}${subDirPart}/${showName}/${entityName}.md`);
+    const showFolderPart = this.settings.groupFilesIntoFolders ? `/${showName}` : '';
+    const targetPath = normalizePath(`${this.settings.snipdDir}${subDirPart}${showFolderPart}/${entityName}.md`);
 
     await createDirForFile(targetPath, this.fs);
 

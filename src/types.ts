@@ -34,6 +34,7 @@ export interface SnipdPluginSettings {
   syncReadme: boolean;
   baseFileName: string;
   folderNameCase: string;
+  groupFilesIntoFolders: boolean;
 }
 
 export const DEFAULT_EPISODE_TEMPLATE = `# {{episode_title}}
@@ -111,6 +112,7 @@ export const DEFAULT_SETTINGS: SnipdPluginSettings = {
   syncReadme: true,
   baseFileName: "Snipd.base",
   folderNameCase: "default",
+  groupFilesIntoFolders: true,
 };
 
 export interface MetadataJson {
