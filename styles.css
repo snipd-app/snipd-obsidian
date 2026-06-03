@@ -297,3 +297,8 @@ If your plugin does not need CSS, delete this file.
   font-size: 12px;
   font-weight: 600;
 }
+
+.snipd-kebab-tip {
+  margin-top: 4px;
+  margin-bottom: 8px;
+}

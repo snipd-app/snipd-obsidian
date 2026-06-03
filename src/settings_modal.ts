@@ -220,6 +220,102 @@ export class SnipdSettingModal extends PluginSettingTab {
         }));
 
     new Setting(containerEl)
+      .setName('Podcast folder casing')
+      .setDesc('Apply case formatting to podcast folder names.')
+      .addDropdown(dropdown => {
+        dropdown.addOption('default', 'Default');
+        dropdown.addOption('kebab', 'Kebab case');
+        dropdown.addOption('snake', 'Snake case');
+        dropdown.addOption('camel', 'Camel case');
+        dropdown.addOption('pascal', 'Pascal case');
+        dropdown.addOption('lowercase', 'Lower case');
+        dropdown.addOption('uppercase', 'Upper case');
+
+        dropdown.setValue(this.plugin.settings.folderNameCase || 'default');
+
+        dropdown.onChange(async (value) => {
+          this.plugin.settings.folderNameCase = value;
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName('Group episodes into folders')
+      .setDesc('Group episode notes into subfolders named after their podcast shows.')
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.settings.groupFilesIntoFolders)
+        .onChange(async (value) => {
+          this.plugin.settings.groupFilesIntoFolders = value;
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
+      .setName('Episode subfolder')
+      .setDesc('Folder inside the base folder where podcast episodes will be saved (leave empty to save directly in the base folder).')
+      .addText(text => text
+        .setPlaceholder('Data')
+        .setValue(this.plugin.settings.subDir)
+        .onChange(async (value) => {
+          let val = value.trim();
+          if (val) {
+            val = normalizePath(val);
+            if (val === '.') {
+              val = '';
+            }
+          }
+          this.plugin.settings.subDir = val;
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
+      .setName('Index subfolder')
+      .setDesc('Folder inside the base folder where the Snipd base index file is saved (leave empty to save directly in the base folder).')
+      .addText(text => text
+        .setPlaceholder('Base')
+        .setValue(this.plugin.settings.baseSubDir)
+        .onChange(async (value) => {
+          let val = value.trim();
+          if (val) {
+            val = normalizePath(val);
+            if (val === '.') {
+              val = '';
+            }
+          }
+          this.plugin.settings.baseSubDir = val;
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
+      .setName('Index filename')
+      .setDesc('Filename of the Snipd base index file.')
+      .addText(text => text
+        .setPlaceholder('Snipd.base')
+        .setValue(this.plugin.settings.baseFileName)
+        .onChange(async (value) => {
+          let val = value.trim();
+          if (val) {
+            val = normalizePath(val);
+            if (val === '.') {
+              val = 'Snipd.base';
+            }
+          } else {
+            val = 'Snipd.base';
+          }
+          this.plugin.settings.baseFileName = val;
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
+      .setName('Sync README')
+      .setDesc('Sync the Snipd README file to the base folder.')
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.settings.syncReadme)
+        .onChange(async (value) => {
+          this.plugin.settings.syncReadme = value;
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
       .setName('Sync frequency')
       .setDesc('Automatically sync at the specified interval')
       .addDropdown(dropdown => {

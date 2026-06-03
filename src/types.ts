@@ -29,6 +29,12 @@ export interface SnipdPluginSettings {
   additionalProperties: Array<{ name: string; template: string; displayName?: string; }> | null;
   saveDebugZips: boolean;
   onlyEditedSnips: boolean;
+  subDir: string;
+  baseSubDir: string;
+  syncReadme: boolean;
+  baseFileName: string;
+  folderNameCase: string;
+  groupFilesIntoFolders: boolean;
 }
 
 export const DEFAULT_EPISODE_TEMPLATE = `# {{episode_title}}
@@ -101,6 +107,12 @@ export const DEFAULT_SETTINGS: SnipdPluginSettings = {
   snipTemplate: null,
   episodeFileNameTemplate: null,
   additionalProperties: null,
+  subDir: "Data",
+  baseSubDir: "Base",
+  syncReadme: true,
+  baseFileName: "Snipd.base",
+  folderNameCase: "default",
+  groupFilesIntoFolders: true,
 };
 
 export interface MetadataJson {

@@ -78,6 +78,11 @@ export class FormattingConfigModal extends Modal {
     fileNameVarsDesc.setText('Variables (click to copy): ');
     const fileNameVars = [
       '{{episode_title}}',
+      '{{episode_title | kebab}}',
+      '{{episode_title | snake}}',
+      '{{episode_title | camel}}',
+      '{{episode_title | pascal}}',
+      '{{episode_title | lowercase}}',
       '{{episode_duration}}',
       '{{episode_publish_date}}',
       '{{episode_url}}'
@@ -98,6 +103,9 @@ export class FormattingConfigModal extends Modal {
         fileNameVarsDesc.appendText(', ');
       }
     });
+
+    const formatTipsDesc = fileNameSection.createDiv({ cls: 'setting-item-description snipd-kebab-tip' });
+    formatTipsDesc.setText('Tip: Use case filters like "| kebab", "| snake", "| camel", "| pascal", or "| lowercase" to format variables (e.g. {{episode_title | snake}}).');
     
     const fileNameInput = fileNameSection.createEl('input', {
       cls: 'snipd-template-input',

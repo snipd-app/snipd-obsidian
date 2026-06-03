@@ -27,7 +27,7 @@ function isValidAdditionalProperties(
 ): props is Array<{ name: string; template: string; displayName?: string }> {
   return Array.isArray(props) && props.length > 0 && props.every((p) => !!p.name?.trim() && !!p.template?.trim());
 }
-import { generateEpisodeFileName, createDirForFile, isDev, debugLog } from './utils';
+import { generateEpisodeFileName, createDirForFile, isDev, debugLog, applyCaseFormat } from './utils';
 import { sanitizeFileName } from './sanitize_file_name';
 import { SnipdSettingModal } from './settings_modal';
 import { SecureStorage } from './secure_storage';
@@ -876,7 +876,10 @@ export default class SnipdPlugin extends Plugin {
       }
       const episodeName = generateEpisodeFileName(episodeData, episodeId, this.settings);
       const showId = episodeData?.show_id;
-      const showName = showId && showsData[showId] ? showsData[showId].name : 'Unknown Show';
+      let showName = showId && showsData[showId] ? showsData[showId].name : 'Unknown Show';
+      if (this.settings.folderNameCase && this.settings.folderNameCase !== 'default') {
+        showName = applyCaseFormat(showName, this.settings.folderNameCase);
+      }
 
       await this.syncFile(
         fileData.full,
@@ -924,7 +927,9 @@ export default class SnipdPlugin extends Plugin {
     showName: string,
     totalSnipCount?: number
   ) {
-    const targetPath = normalizePath(`${this.settings.snipdDir}/Data/${showName}/${entityName}.md`);
+    const subDirPart = this.settings.subDir ? `/${this.settings.subDir}` : '';
+    const showFolderPart = this.settings.groupFilesIntoFolders ? `/${showName}` : '';
+    const targetPath = normalizePath(`${this.settings.snipdDir}${subDirPart}${showFolderPart}/${entityName}.md`);
 
     await createDirForFile(targetPath, this.fs);
 
@@ -1063,6 +1068,17 @@ export default class SnipdPlugin extends Plugin {
         let relativePath = zipEntry.filename;
         if (relativePath.startsWith('Files/')) {
           relativePath = relativePath.substring(6);
+        }
+        if (relativePath.startsWith('Base/') && this.settings.baseSubDir !== 'Base') {
+          const replacement = this.settings.baseSubDir ? `${this.settings.baseSubDir}/` : '';
+          relativePath = relativePath.replace(/^Base\//, replacement);
+        }
+        if (relativePath.endsWith('Snipd.base') && this.settings.baseFileName !== 'Snipd.base') {
+          relativePath = relativePath.replace(/Snipd\.base$/, this.settings.baseFileName);
+        }
+        if (relativePath.toLowerCase() === 'readme.md' && !this.settings.syncReadme) {
+          debugLog('Snipd plugin: skipping README.md file - syncReadme setting is disabled.');
+          continue;
         }
         const baseFilePath = normalizePath(`${folderPath}/${relativePath}`);
         filesInZip.add(baseFilePath);
@@ -1211,6 +1227,17 @@ export default class SnipdPlugin extends Plugin {
         if (relativePath.startsWith('Files/')) {
           relativePath = relativePath.substring(6);
         }
+        if (relativePath.startsWith('Base/') && this.settings.baseSubDir !== 'Base') {
+          const replacement = this.settings.baseSubDir ? `${this.settings.baseSubDir}/` : '';
+          relativePath = relativePath.replace(/^Base\//, replacement);
+        }
+        if (relativePath.endsWith('Snipd.base') && this.settings.baseFileName !== 'Snipd.base') {
+          relativePath = relativePath.replace(/Snipd\.base$/, this.settings.baseFileName);
+        }
+        if (relativePath.toLowerCase() === 'readme.md' && !this.settings.syncReadme) {
+          debugLog('Snipd plugin: skipping README.md file - syncReadme setting is disabled.');
+          continue;
+        }
         const baseFilePath = normalizePath(`${folderPath}/${relativePath}`);
         
         await createDirForFile(baseFilePath, this.app.vault.adapter);
@@ -1278,7 +1305,16 @@ export default class SnipdPlugin extends Plugin {
     }
     
     if (!defaultOpenPath) {
-      defaultOpenPath = 'Base/Snipd.base';
+      const subDirPart = this.settings.baseSubDir ? `${this.settings.baseSubDir}/` : '';
+      defaultOpenPath = `${subDirPart}${this.settings.baseFileName}`;
+    } else {
+      if (defaultOpenPath.startsWith('Base/') && this.settings.baseSubDir !== 'Base') {
+        const replacement = this.settings.baseSubDir ? `${this.settings.baseSubDir}/` : '';
+        defaultOpenPath = defaultOpenPath.replace(/^Base\//, replacement);
+      }
+      if (defaultOpenPath.endsWith('Snipd.base') && this.settings.baseFileName !== 'Snipd.base') {
+        defaultOpenPath = defaultOpenPath.replace(/Snipd\.base$/, this.settings.baseFileName);
+      }
     }
     
     const baseFilePath = normalizePath(`${this.settings.snipdDir}/${defaultOpenPath}`);
