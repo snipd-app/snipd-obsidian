@@ -1068,6 +1068,10 @@ export default class SnipdPlugin extends Plugin {
         if (relativePath.startsWith('Base/') && this.settings.baseSubDir !== 'Base') {
           relativePath = relativePath.replace(/^Base\//, `${this.settings.baseSubDir}/`);
         }
+        if (relativePath.toLowerCase() === 'readme.md' && !this.settings.syncReadme) {
+          debugLog('Snipd plugin: skipping README.md file - syncReadme setting is disabled.');
+          continue;
+        }
         const baseFilePath = normalizePath(`${folderPath}/${relativePath}`);
         filesInZip.add(baseFilePath);
         
@@ -1217,6 +1221,10 @@ export default class SnipdPlugin extends Plugin {
         }
         if (relativePath.startsWith('Base/') && this.settings.baseSubDir !== 'Base') {
           relativePath = relativePath.replace(/^Base\//, `${this.settings.baseSubDir}/`);
+        }
+        if (relativePath.toLowerCase() === 'readme.md' && !this.settings.syncReadme) {
+          debugLog('Snipd plugin: skipping README.md file - syncReadme setting is disabled.');
+          continue;
         }
         const baseFilePath = normalizePath(`${folderPath}/${relativePath}`);
         

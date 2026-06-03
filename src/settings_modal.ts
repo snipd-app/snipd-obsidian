@@ -256,6 +256,16 @@ export class SnipdSettingModal extends PluginSettingTab {
         }));
 
     new Setting(containerEl)
+      .setName('Sync README')
+      .setDesc('Sync the Snipd README file to the base folder.')
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.settings.syncReadme)
+        .onChange(async (value) => {
+          this.plugin.settings.syncReadme = value;
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
       .setName('Sync frequency')
       .setDesc('Automatically sync at the specified interval')
       .addDropdown(dropdown => {

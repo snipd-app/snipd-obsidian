@@ -33,7 +33,7 @@ export default defineConfig([
         "warn",
         {
           brands: ["Obsidian", "Snipd"],
-          acronyms: ["OK"],
+          acronyms: ["OK", "README", "README.md"],
           enforceCamelCaseLower: true,
         },
       ],
