@@ -45,8 +45,8 @@ export function toUpperCase(str: string): string {
   return str.toUpperCase();
 }
 
-function applyFilter(value: string, filterName: string): string {
-  switch (filterName) {
+export function applyCaseFormat(value: string, format: string): string {
+  switch (format) {
     case 'kebab':
       return toKebabCase(value);
     case 'snake':
@@ -86,7 +86,7 @@ export function generateEpisodeFileName(
   let result = template.replace(/\{\{([a-zA-Z0-9_]+)(?:\s*\|\s*([a-zA-Z0-9_]+))?\}\}\[\[.*?\]\]/g, (_, varName: string, filterName: string | undefined) => {
     let value = variables[varName] || '';
     if (value && filterName) {
-      value = applyFilter(value, filterName);
+      value = applyCaseFormat(value, filterName);
     }
     return value;
   });
@@ -97,7 +97,7 @@ export function generateEpisodeFileName(
       debugLog(`Snipd plugin: Unknown variable {{${varName}}} in episode filename template`);
     }
     if (value && filterName) {
-      value = applyFilter(value, filterName);
+      value = applyCaseFormat(value, filterName);
     }
     return value;
   });

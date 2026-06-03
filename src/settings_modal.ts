@@ -220,6 +220,26 @@ export class SnipdSettingModal extends PluginSettingTab {
         }));
 
     new Setting(containerEl)
+      .setName('Podcast folder casing')
+      .setDesc('Apply case formatting to podcast folder names.')
+      .addDropdown(dropdown => {
+        dropdown.addOption('default', 'Default');
+        dropdown.addOption('kebab', 'Kebab case');
+        dropdown.addOption('snake', 'Snake case');
+        dropdown.addOption('camel', 'Camel case');
+        dropdown.addOption('pascal', 'Pascal case');
+        dropdown.addOption('lowercase', 'Lower case');
+        dropdown.addOption('uppercase', 'Upper case');
+
+        dropdown.setValue(this.plugin.settings.folderNameCase || 'default');
+
+        dropdown.onChange(async (value) => {
+          this.plugin.settings.folderNameCase = value;
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
       .setName('Episode subfolder')
       .setDesc('Folder inside the base folder where podcast episodes will be saved (leave empty to save directly in the base folder).')
       .addText(text => text

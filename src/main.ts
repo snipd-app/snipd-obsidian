@@ -27,7 +27,7 @@ function isValidAdditionalProperties(
 ): props is Array<{ name: string; template: string; displayName?: string }> {
   return Array.isArray(props) && props.length > 0 && props.every((p) => !!p.name?.trim() && !!p.template?.trim());
 }
-import { generateEpisodeFileName, createDirForFile, isDev, debugLog } from './utils';
+import { generateEpisodeFileName, createDirForFile, isDev, debugLog, applyCaseFormat } from './utils';
 import { sanitizeFileName } from './sanitize_file_name';
 import { SnipdSettingModal } from './settings_modal';
 import { SecureStorage } from './secure_storage';
@@ -876,7 +876,10 @@ export default class SnipdPlugin extends Plugin {
       }
       const episodeName = generateEpisodeFileName(episodeData, episodeId, this.settings);
       const showId = episodeData?.show_id;
-      const showName = showId && showsData[showId] ? showsData[showId].name : 'Unknown Show';
+      let showName = showId && showsData[showId] ? showsData[showId].name : 'Unknown Show';
+      if (this.settings.folderNameCase && this.settings.folderNameCase !== 'default') {
+        showName = applyCaseFormat(showName, this.settings.folderNameCase);
+      }
 
       await this.syncFile(
         fileData.full,
