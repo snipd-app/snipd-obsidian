@@ -59,6 +59,12 @@ type ExportRequestBody = {
 
 type SyncStats = { episodeCount: number; snipCount: number; transcriptCount: number };
 
+/**
+ * `signal` belongs to this run, not to `syncAbortController`: Stop clears the controller and a new
+ * sync installs its own, so only the captured signal still tells this run it was stopped.
+ */
+type SyncRun = { signal: AbortSignal; debugFolderPath: string | null };
+
 export type TranscriptSyncProgress =
   | { phase: 'checking'; episodeCount: number }
   | { phase: 'exporting'; batchIndex: number; totalBatches: number; episodeCount: number };
@@ -312,21 +318,23 @@ export default class SnipdPlugin extends Plugin {
 
     await this.checkAndHandleMissingDirectory();
 
-    const debugFolderPath = this.settings.saveDebugZips ? `snipd_plugin_debug/sync_${Date.now()}` : null;
-    await this.initializeSync();
+    const run: SyncRun = {
+      signal: await this.initializeSync(),
+      debugFolderPath: this.settings.saveDebugZips ? `snipd_plugin_debug/sync_${Date.now()}` : null,
+    };
 
-    const metadata = await this.fetchOrLoadMetadata(debugFolderPath);
-    if (!metadata) {
+    const metadata = await this.fetchOrLoadMetadata(run);
+    if (!metadata || run.signal.aborted) {
       return;
     }
 
-    const stats = await this.processAllBatches(metadata, debugFolderPath);
-    if (!stats) {
+    const stats = await this.processAllBatches(metadata, run);
+    if (!stats || run.signal.aborted) {
       return;
     }
 
-    const pendingTranscriptCount = await this.syncPendingTranscripts(options.force === true, debugFolderPath);
-    if (pendingTranscriptCount === null) {
+    const pendingTranscriptCount = await this.syncPendingTranscripts(options.force === true, run);
+    if (pendingTranscriptCount === null || run.signal.aborted) {
       return;
     }
 
@@ -356,10 +364,11 @@ export default class SnipdPlugin extends Plugin {
     }
   }
 
-  private async initializeSync(): Promise<void> {
+  private async initializeSync(): Promise<AbortSignal> {
     debugLog('Snipd plugin: starting sync...');
     this.settings.isSyncing = true;
-    this.syncAbortController = new AbortController();
+    const abortController = new AbortController();
+    this.syncAbortController = abortController;
     this.transcriptSectionNeeded.clear();
     await this.saveSettings();
     
@@ -369,6 +378,7 @@ export default class SnipdPlugin extends Plugin {
 
     this.notice("Snipd sync started...", true, 0, true);
     this.setStatusBarPersistentMessage("Snipd sync in progress...");
+    return abortController.signal;
   }
 
   private buildMetadataUrl(): string {
@@ -386,7 +396,7 @@ export default class SnipdPlugin extends Plugin {
     return url;
   }
 
-  private async fetchMetadataFromApi(debugFolderPath: string | null): Promise<FetchExportMetadataResponse | null> {
+  private async fetchMetadataFromApi(run: SyncRun): Promise<FetchExportMetadataResponse | null> {
     const url = this.buildMetadataUrl();
 
     let response;
@@ -402,10 +412,17 @@ export default class SnipdPlugin extends Plugin {
       });
       debugLog(`Snipd plugin: metadata response status: ${response.status}`);
     } catch (e) {
+      if (run.signal.aborted) {
+        return null;
+      }
       debugLog("Snipd plugin: request failed in syncSnipd: ", e);
       const errorResponse = this.extractResponseFromError(e);
       const errorMsg = this.formatApiErrorMessage(e, errorResponse, "Sync");
       await this.handleSyncError(errorMsg);
+      return null;
+    }
+
+    if (run.signal.aborted) {
       return null;
     }
 
@@ -414,13 +431,13 @@ export default class SnipdPlugin extends Plugin {
 
       await this.saveMetadataToFile(metadata);
 
-      if (debugFolderPath) {
-        await createDirForFile(`${debugFolderPath}/metadata.json`, this.app.vault.adapter);
+      if (run.debugFolderPath) {
+        await createDirForFile(`${run.debugFolderPath}/metadata.json`, this.app.vault.adapter);
         await this.app.vault.adapter.write(
-          `${debugFolderPath}/metadata.json`,
+          `${run.debugFolderPath}/metadata.json`,
           JSON.stringify(metadata, null, 2)
         );
-        debugLog(`Snipd plugin: saved debug metadata to ${debugFolderPath}/metadata.json`);
+        debugLog(`Snipd plugin: saved debug metadata to ${run.debugFolderPath}/metadata.json`);
       }
 
       this.settings.current_export_updated_after = this.settings.latestSyncedSnipUpdateTs || null;
@@ -450,9 +467,9 @@ export default class SnipdPlugin extends Plugin {
     }
   }
 
-  private async fetchOrLoadMetadata(debugFolderPath: string | null): Promise<FetchExportMetadataResponse | null> {
+  private async fetchOrLoadMetadata(run: SyncRun): Promise<FetchExportMetadataResponse | null> {
     if (!this.settings.current_export_updated_after) {
-      return await this.fetchMetadataFromApi(debugFolderPath);
+      return await this.fetchMetadataFromApi(run);
     } else {
       const loadedMetadata = await this.loadMetadataFromFile();
       if (!loadedMetadata) {
@@ -512,11 +529,15 @@ export default class SnipdPlugin extends Plugin {
     return requestBody;
   }
 
-  /** Returns null after reporting the failure through handleSyncError. */
+  /**
+   * Returns null after reporting the failure through handleSyncError, or silently when the run was
+   * stopped meanwhile: a response that arrives after Stop must neither be written nor reported,
+   * since the error handling would also reset a sync started after the stop.
+   */
   private async requestExportZip(
     requestBody: ExportRequestBody,
     context: string,
-    debugFolderPath: string | null,
+    run: SyncRun,
     debugFileName: string,
   ): Promise<Blob | null> {
     let response;
@@ -531,9 +552,16 @@ export default class SnipdPlugin extends Plugin {
         body: JSON.stringify(requestBody),
       });
     } catch (e) {
+      if (run.signal.aborted) {
+        return null;
+      }
       debugLog(`Snipd plugin: request failed (${context}): `, e);
       const errorResponse = this.extractResponseFromError(e);
       await this.handleSyncError(this.formatApiErrorMessage(e, errorResponse, context));
+      return null;
+    }
+
+    if (run.signal.aborted) {
       return null;
     }
 
@@ -544,8 +572,8 @@ export default class SnipdPlugin extends Plugin {
     }
 
     const blob = new Blob([response.arrayBuffer]);
-    if (debugFolderPath) {
-      const debugFilePath = `${debugFolderPath}/${debugFileName}`;
+    if (run.debugFolderPath) {
+      const debugFilePath = `${run.debugFolderPath}/${debugFileName}`;
       await createDirForFile(debugFilePath, this.app.vault.adapter);
       await this.app.vault.adapter.writeBinary(debugFilePath, await blob.arrayBuffer());
       debugLog(`Snipd plugin: saved debug export to ${debugFilePath}`);
@@ -584,9 +612,9 @@ export default class SnipdPlugin extends Plugin {
    * transcript is not known to be current; the eligibility check says which of those have a
    * newer transcript the user may export, and only those are exported, in small batches.
    * `force` ignores the re-check throttle. Returns the number of transcripts written, or null
-   * when the sync was aborted with an error.
+   * when the sync failed or was stopped.
    */
-  private async syncPendingTranscripts(force: boolean, debugFolderPath: string | null): Promise<number | null> {
+  private async syncPendingTranscripts(force: boolean, run: SyncRun): Promise<number | null> {
     if (!this.settings.syncTranscripts) {
       return 0;
     }
@@ -612,6 +640,9 @@ export default class SnipdPlugin extends Plugin {
     const results: CheckTranscriptEligibilityResponse['episodes'] = {};
     for (let i = 0; i < toCheck.length; i += TRANSCRIPT_ELIGIBILITY_MAX_IDS) {
       const result = await this.checkTranscriptEligibility(toCheck.slice(i, i + TRANSCRIPT_ELIGIBILITY_MAX_IDS));
+      if (run.signal.aborted) {
+        return null;
+      }
       if (!result) {
         debugLog('Snipd plugin: transcript eligibility check failed, retrying next sync');
         return 0;
@@ -669,13 +700,16 @@ export default class SnipdPlugin extends Plugin {
     const updatedAfter = this.settings.latestSyncedSnipUpdateTs ?? this.settings.last_updated_after;
     let transcriptCount = 0;
     for (let i = 0; i < batchCount; i++) {
+      if (run.signal.aborted) {
+        return null;
+      }
       const episodeIds = toExport.slice(i * TRANSCRIPT_EXPORT_BATCH_SIZE, (i + 1) * TRANSCRIPT_EXPORT_BATCH_SIZE);
       this.setTranscriptSyncProgress({ phase: 'exporting', batchIndex: i, totalBatches: batchCount, episodeCount: episodeIds.length });
       this.setStatusBarPersistentMessage(`Syncing transcripts batch ${i + 1}/${batchCount} (${episodeIds.length} episodes)...`);
       const blob = await this.requestExportZip(
         this.buildExportRequestBody(episodeIds, { updatedAfter, includeTranscript: true, transcriptOnly: true }),
         `Transcript sync at batch ${i + 1}`,
-        debugFolderPath,
+        run,
         `transcripts_${i}_${Date.now()}.zip`,
       );
       if (!blob) {
@@ -697,7 +731,7 @@ export default class SnipdPlugin extends Plugin {
     batchIndex: number,
     batch: { episodes: EpisodeSnipMetadata[] },
     totalBatches: number,
-    debugFolderPath: string | null
+    run: SyncRun,
   ): Promise<SyncStats | null> {
     const snipdDirExists = await this.checkSnipdDirectoryExists();
     if (!snipdDirExists && (this.settings.fileHashMap && Object.keys(this.settings.fileHashMap).length > 0)) {
@@ -722,6 +756,9 @@ export default class SnipdPlugin extends Plugin {
     const stats: SyncStats = { episodeCount: 0, snipCount: 0, transcriptCount: 0 };
     const requests = this.splitBatchRequests(episodeIds);
     for (let i = 0; i < requests.length; i++) {
+      if (run.signal.aborted) {
+        return null;
+      }
       const request = requests[i];
       if (requests.length > 1) {
         this.setStatusBarPersistentMessage(`Syncing batch ${batchIndex + 1}/${totalBatches}, part ${i + 1}/${requests.length} (${request.episodeIds.length} episodes${request.includeTranscript ? ', with transcripts' : ''})...`);
@@ -729,7 +766,7 @@ export default class SnipdPlugin extends Plugin {
       const blob = await this.requestExportZip(
         this.buildExportRequestBody(request.episodeIds, { updatedAfter: this.settings.last_updated_after, includeTranscript: request.includeTranscript }),
         `Sync at batch ${batchIndex + 1}`,
-        debugFolderPath,
+        run,
         `batch_${batchIndex}_${i}_${Date.now()}.zip`,
       );
       if (!blob) {
@@ -777,14 +814,17 @@ export default class SnipdPlugin extends Plugin {
 
   private async processAllBatches(
     metadata: FetchExportMetadataResponse,
-    debugFolderPath: string | null
+    run: SyncRun,
   ): Promise<SyncStats | null> {
     const totals: SyncStats = { episodeCount: 0, snipCount: 0, transcriptCount: 0 };
 
     try {
       for (let i = this.settings.current_export_batch_index; i < metadata.episode_batch_count; i++) {
+        if (run.signal.aborted) {
+          return null;
+        }
         const batch = metadata.episode_batches[i];
-        const stats = await this.processSingleBatch(i, batch, metadata.episode_batch_count, debugFolderPath);
+        const stats = await this.processSingleBatch(i, batch, metadata.episode_batch_count, run);
         
         if (!stats) {
           return null;
