@@ -23,12 +23,21 @@ export interface SnipdPluginSettings {
   lastSyncTimestamp: string | null;
   lastSyncEpisodeCount: number;
   lastSyncSnipCount: number;
+  lastSyncTranscriptCount: number;
   episodeTemplate: string | null;
   snipTemplate: string | null;
   episodeFileNameTemplate: string | null;
   additionalProperties: Array<{ name: string; template: string; displayName?: string; }> | null;
   saveDebugZips: boolean;
   onlyEditedSnips: boolean;
+  syncTranscripts: boolean;
+  episodeTranscriptsSyncedTs: { [episodeId: string]: string };
+  pendingTranscriptEpisodeIds: string[];
+  transcriptEligibilityCheckedTs: { [episodeId: string]: string };
+}
+
+export interface CheckTranscriptEligibilityResponse {
+  episodes: { [episodeId: string]: { transcript_update_ts: string | null; status: string; }; };
 }
 
 export const DEFAULT_EPISODE_TEMPLATE = `# {{episode_title}}
@@ -95,12 +104,17 @@ export const DEFAULT_SETTINGS: SnipdPluginSettings = {
   lastSyncTimestamp: null,
   lastSyncEpisodeCount: 0,
   lastSyncSnipCount: 0,
+  lastSyncTranscriptCount: 0,
   saveDebugZips: false,
   onlyEditedSnips: false,
+  syncTranscripts: false,
   episodeTemplate: null,
   snipTemplate: null,
   episodeFileNameTemplate: null,
   additionalProperties: null,
+  episodeTranscriptsSyncedTs: {},
+  pendingTranscriptEpisodeIds: [],
+  transcriptEligibilityCheckedTs: {},
 };
 
 export interface MetadataJson {
@@ -121,6 +135,8 @@ export interface EpisodeEntityData {
   episode_url: string;
   total_snip_count?: number;
   updated_snip_count?: number;
+  transcript_update_ts?: string | null;
+  has_transcript_block_file?: boolean;
 }
 
 export interface EpisodeSnipMetadata {

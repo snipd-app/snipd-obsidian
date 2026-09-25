@@ -16,6 +16,7 @@ Lets you automatically sync all your podcast highlights (=snips) to your Obsidia
   - Rich podcast metadata incl. image, title, publish date & more
 - Customize the formatting
 - Choose whether to only sync edited snips
+- Optionally sync full episode transcripts for episodes you have listened to or exported in the Snipd app (Premium)
 - Compatible with Obsidian Bases:
   - Metadata as properties
   - Two default Bases views out of the box

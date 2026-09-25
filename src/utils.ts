@@ -57,3 +57,14 @@ export async function createDirForFile(filePath: string, fs: DataAdapter): Promi
     await fs.mkdir(dirPath);
   }
 }
+
+export function formatSyncCounts(episodeCount: number, snipCount: number, transcriptCount: number): string {
+  const parts: string[] = [];
+  if (episodeCount > 0 || snipCount > 0) {
+    parts.push(`${episodeCount} episodes, ${snipCount} snips`);
+  }
+  if (transcriptCount > 0) {
+    parts.push(`${transcriptCount} transcript${transcriptCount !== 1 ? 's' : ''}`);
+  }
+  return parts.join(', ');
+}

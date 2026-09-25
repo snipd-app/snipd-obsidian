@@ -11,15 +11,16 @@ import {
 import * as zip from "@zip.js/zip.js";
 // @ts-ignore
 import { Md5 } from "ts-md5";
-import { 
-  SnipdPluginSettings, 
+import {
+  SnipdPluginSettings,
   DEFAULT_SETTINGS,
   DEFAULT_EPISODE_TEMPLATE,
   DEFAULT_SNIP_TEMPLATE,
   MetadataJson,
   EpisodeSnipMetadata,
   FetchExportMetadataResponse,
-  BaseFileMetadata
+  BaseFileMetadata,
+  CheckTranscriptEligibilityResponse
 } from './types';
 
 function isValidAdditionalProperties(
@@ -27,13 +28,46 @@ function isValidAdditionalProperties(
 ): props is Array<{ name: string; template: string; displayName?: string }> {
   return Array.isArray(props) && props.length > 0 && props.every((p) => !!p.name?.trim() && !!p.template?.trim());
 }
-import { generateEpisodeFileName, createDirForFile, isDev, debugLog } from './utils';
+import { generateEpisodeFileName, createDirForFile, isDev, debugLog, formatSyncCounts } from './utils';
 import { sanitizeFileName } from './sanitize_file_name';
 import { SnipdSettingModal } from './settings_modal';
 import { SecureStorage } from './secure_storage';
 
+const TRANSCRIPT_HEADER = '## Full episode transcript';
+const SNIPD_FOOTER = 'Created with [Snipd](https://www.snipd.com) | Highlight & Take Notes from Podcasts';
+
 export const AUTH_URL = "https://app.snipd.com/obsidian/auth";
 export const API_BASE_URL = isDev() ? "http://0.0.0.0:8080/v1/public/api" : "https://api.snipd.com/v1/public/api";
+
+const TRANSCRIPT_ELIGIBILITY_RECHECK_MS = 24 * 60 * 60 * 1000;
+// check-transcript-eligibility rejects requests with more ids than this.
+const TRANSCRIPT_ELIGIBILITY_MAX_IDS = 1000;
+// A full transcript is ~100 KB of markdown; small batches keep each zip, and the memory it is
+// unpacked into, bounded.
+const TRANSCRIPT_EXPORT_BATCH_SIZE = 50;
+
+type ExportRequestBody = {
+  episode_ids: string[];
+  episode_template: string;
+  snip_template: string;
+  additional_properties?: Array<{ name: string; template: string; displayName?: string; }>;
+  updated_after?: string;
+  only_edited_snips?: boolean;
+  include_transcript?: boolean;
+  transcript_only?: boolean;
+};
+
+type SyncStats = { episodeCount: number; snipCount: number; transcriptCount: number };
+
+/**
+ * `signal` belongs to this run, not to `syncAbortController`: Stop clears the controller and a new
+ * sync installs its own, so only the captured signal still tells this run it was stopped.
+ */
+type SyncRun = { signal: AbortSignal; debugFolderPath: string | null };
+
+export type TranscriptSyncProgress =
+  | { phase: 'checking'; episodeCount: number }
+  | { phase: 'exporting'; batchIndex: number; totalBatches: number; episodeCount: number };
 
 export default class SnipdPlugin extends Plugin {
   settings: SnipdPluginSettings;
@@ -42,6 +76,19 @@ export default class SnipdPlugin extends Plugin {
   statusBar: StatusBar;
   settingsTab: SnipdSettingModal | null = null;
   syncAbortController: AbortController | null = null;
+  /** Not in settings: an interrupted transcript phase restarts from the pending list, it never resumes. */
+  transcriptSyncProgress: TranscriptSyncProgress | null = null;
+  /** Episodes whose note was written without a transcript section during the current sync. */
+  private transcriptSectionNeeded = new Set<string>();
+  /**
+   * Vault id + key that `encryptedApiKey` currently encrypts. Encryption runs 100k PBKDF2
+   * iterations (~100 ms) and saveSettings is called once per synced note.
+   */
+  private encryptedApiKeySource: string | null = null;
+
+  private formatAuthorizationToken(apiKey: string): string {
+    return `Bearer ${apiKey}`;
+  }
 
   private extractResponseFromError(error: unknown): { status: number } | null {
     if (error && typeof error === 'object' && error !== null) {
@@ -132,6 +179,7 @@ export default class SnipdPlugin extends Plugin {
   async clearSettingsAfterRun() {
     this.settings.isSyncing = false;
     this.syncAbortController = null;
+    this.transcriptSyncProgress = null;
     await this.saveSettings();
     if (this.settingsTab) {
       this.settingsTab.display();
@@ -209,6 +257,9 @@ export default class SnipdPlugin extends Plugin {
     this.settings.current_batch_episode_count = 0;
     this.settings.current_batch_snip_count = 0;
     this.settings.latestSyncedSnipUpdateTs = null;
+    this.settings.episodeTranscriptsSyncedTs = {};
+    this.settings.pendingTranscriptEpisodeIds = [];
+    this.settings.transcriptEligibilityCheckedTs = {};
     await this.deleteMetadataFile();
     await this.saveSettings();
   }
@@ -247,6 +298,7 @@ export default class SnipdPlugin extends Plugin {
     this.settings.lastSyncTimestamp = null;
     this.settings.lastSyncEpisodeCount = 0;
     this.settings.lastSyncSnipCount = 0;
+    this.settings.lastSyncTranscriptCount = 0;
     this.settings.hasCompletedFirstSync = false;
     await this.saveSettings();
 
@@ -258,27 +310,35 @@ export default class SnipdPlugin extends Plugin {
     await this.syncSnipd();
   }
 
-  async syncSnipd() {
+  /** `force` ignores the re-check throttle for pending transcripts. */
+  async syncSnipd(options: { force?: boolean } = {}) {
     if (!this.validateSyncPreconditions()) {
       return;
     }
 
     await this.checkAndHandleMissingDirectory();
 
-    const debugFolderPath = this.settings.saveDebugZips ? `snipd_plugin_debug/sync_${Date.now()}` : null;
-    await this.initializeSync();
+    const run: SyncRun = {
+      signal: await this.initializeSync(),
+      debugFolderPath: this.settings.saveDebugZips ? `snipd_plugin_debug/sync_${Date.now()}` : null,
+    };
 
-    const metadata = await this.fetchOrLoadMetadata(debugFolderPath);
-    if (!metadata) {
+    const metadata = await this.fetchOrLoadMetadata(run);
+    if (!metadata || run.signal.aborted) {
       return;
     }
 
-    const stats = await this.processAllBatches(metadata, debugFolderPath);
-    if (!stats) {
+    const stats = await this.processAllBatches(metadata, run);
+    if (!stats || run.signal.aborted) {
       return;
     }
 
-    await this.finalizeSync(stats.episodeCount, stats.snipCount);
+    const pendingTranscriptCount = await this.syncPendingTranscripts(options.force === true, run);
+    if (pendingTranscriptCount === null || run.signal.aborted) {
+      return;
+    }
+
+    await this.finalizeSync({ ...stats, transcriptCount: stats.transcriptCount + pendingTranscriptCount });
   }
 
   private validateSyncPreconditions(): boolean {
@@ -304,10 +364,12 @@ export default class SnipdPlugin extends Plugin {
     }
   }
 
-  private async initializeSync(): Promise<void> {
+  private async initializeSync(): Promise<AbortSignal> {
     debugLog('Snipd plugin: starting sync...');
     this.settings.isSyncing = true;
-    this.syncAbortController = new AbortController();
+    const abortController = new AbortController();
+    this.syncAbortController = abortController;
+    this.transcriptSectionNeeded.clear();
     await this.saveSettings();
     
     if (this.settingsTab) {
@@ -316,6 +378,7 @@ export default class SnipdPlugin extends Plugin {
 
     this.notice("Snipd sync started...", true, 0, true);
     this.setStatusBarPersistentMessage("Snipd sync in progress...");
+    return abortController.signal;
   }
 
   private buildMetadataUrl(): string {
@@ -333,7 +396,7 @@ export default class SnipdPlugin extends Plugin {
     return url;
   }
 
-  private async fetchMetadataFromApi(debugFolderPath: string | null): Promise<FetchExportMetadataResponse | null> {
+  private async fetchMetadataFromApi(run: SyncRun): Promise<FetchExportMetadataResponse | null> {
     const url = this.buildMetadataUrl();
 
     let response;
@@ -344,11 +407,14 @@ export default class SnipdPlugin extends Plugin {
         url: url,
         method: 'GET',
         headers: {
-          'Authorization': `Bearer ${this.settings.apiKey}`,
+          'Authorization': this.formatAuthorizationToken(this.settings.apiKey),
         },
       });
       debugLog(`Snipd plugin: metadata response status: ${response.status}`);
     } catch (e) {
+      if (run.signal.aborted) {
+        return null;
+      }
       debugLog("Snipd plugin: request failed in syncSnipd: ", e);
       const errorResponse = this.extractResponseFromError(e);
       const errorMsg = this.formatApiErrorMessage(e, errorResponse, "Sync");
@@ -356,19 +422,24 @@ export default class SnipdPlugin extends Plugin {
       return null;
     }
 
+    if (run.signal.aborted) {
+      return null;
+    }
+
     if (response && response.status >= 200 && response.status < 300) {
       const metadata = response.json as FetchExportMetadataResponse;
+
       await this.saveMetadataToFile(metadata);
-      
-      if (debugFolderPath) {
-        await createDirForFile(`${debugFolderPath}/metadata.json`, this.app.vault.adapter);
+
+      if (run.debugFolderPath) {
+        await createDirForFile(`${run.debugFolderPath}/metadata.json`, this.app.vault.adapter);
         await this.app.vault.adapter.write(
-          `${debugFolderPath}/metadata.json`,
+          `${run.debugFolderPath}/metadata.json`,
           JSON.stringify(metadata, null, 2)
         );
-        debugLog(`Snipd plugin: saved debug metadata to ${debugFolderPath}/metadata.json`);
+        debugLog(`Snipd plugin: saved debug metadata to ${run.debugFolderPath}/metadata.json`);
       }
-      
+
       this.settings.current_export_updated_after = this.settings.latestSyncedSnipUpdateTs || null;
       this.settings.current_export_batch_index = 0;
       this.settings.current_export_total_batches = metadata.episode_batch_count;
@@ -396,9 +467,9 @@ export default class SnipdPlugin extends Plugin {
     }
   }
 
-  private async fetchOrLoadMetadata(debugFolderPath: string | null): Promise<FetchExportMetadataResponse | null> {
+  private async fetchOrLoadMetadata(run: SyncRun): Promise<FetchExportMetadataResponse | null> {
     if (!this.settings.current_export_updated_after) {
-      return await this.fetchMetadataFromApi(debugFolderPath);
+      return await this.fetchMetadataFromApi(run);
     } else {
       const loadedMetadata = await this.loadMetadataFromFile();
       if (!loadedMetadata) {
@@ -419,27 +490,16 @@ export default class SnipdPlugin extends Plugin {
     }
   }
 
-  private buildBatchRequestBody(episodeIds: string[]): {
-    episode_ids: string[];
-    episode_template?: string;
-    snip_template?: string;
-    additional_properties?: Array<{ name: string; template: string; displayName?: string; }>;
-    updated_after?: string;
-    only_edited_snips?: boolean;
-  } {
-    const requestBody: {
-      episode_ids: string[];
-      episode_template?: string;
-      snip_template?: string;
-      additional_properties?: Array<{ name: string; template: string; displayName?: string; }>;
-      updated_after?: string;
-      only_edited_snips?: boolean;
-    } = {
+  private buildExportRequestBody(
+    episodeIds: string[],
+    options: { updatedAfter: string | null; includeTranscript: boolean; transcriptOnly?: boolean },
+  ): ExportRequestBody {
+    const requestBody: ExportRequestBody = {
       episode_ids: episodeIds,
       episode_template: this.settings.episodeTemplate ?? DEFAULT_EPISODE_TEMPLATE,
       snip_template: this.settings.snipTemplate ?? DEFAULT_SNIP_TEMPLATE,
     };
-    
+
     const additionalProps = this.settings.additionalProperties;
     if (isValidAdditionalProperties(additionalProps)) {
       requestBody.additional_properties = additionalProps.map((prop) => ({
@@ -448,24 +508,231 @@ export default class SnipdPlugin extends Plugin {
         ...(prop.displayName?.trim() ? { displayName: prop.displayName.trim() } : {}),
       }));
     }
-    
-    if (this.settings.last_updated_after) {
-      requestBody.updated_after = this.settings.last_updated_after;
+
+    if (options.updatedAfter) {
+      requestBody.updated_after = options.updatedAfter;
     }
-    
+
     if (this.settings.onlyEditedSnips) {
       requestBody.only_edited_snips = true;
     }
-    
+
+    if (options.includeTranscript) {
+      requestBody.include_transcript = true;
+    }
+
+    // Backends without this flag ignore it and return the snips too, which the merge handles.
+    if (options.transcriptOnly) {
+      requestBody.transcript_only = true;
+    }
+
     return requestBody;
+  }
+
+  /**
+   * Returns null after reporting the failure through handleSyncError, or silently when the run was
+   * stopped meanwhile: a response that arrives after Stop must neither be written nor reported,
+   * since the error handling would also reset a sync started after the stop.
+   */
+  private async requestExportZip(
+    requestBody: ExportRequestBody,
+    context: string,
+    run: SyncRun,
+    debugFileName: string,
+  ): Promise<Blob | null> {
+    let response;
+    try {
+      response = await requestUrl({
+        url: `${API_BASE_URL}/obsidian/export-episode-snips`,
+        method: 'POST',
+        headers: {
+          'Authorization': this.formatAuthorizationToken(this.settings.apiKey),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      });
+    } catch (e) {
+      if (run.signal.aborted) {
+        return null;
+      }
+      debugLog(`Snipd plugin: request failed (${context}): `, e);
+      const errorResponse = this.extractResponseFromError(e);
+      await this.handleSyncError(this.formatApiErrorMessage(e, errorResponse, context));
+      return null;
+    }
+
+    if (run.signal.aborted) {
+      return null;
+    }
+
+    if (!response || response.status < 200 || response.status >= 300) {
+      debugLog(`Snipd plugin: bad response (${context}): `, response);
+      await this.handleSyncError(this.formatApiErrorMessage(null, response, context));
+      return null;
+    }
+
+    const blob = new Blob([response.arrayBuffer]);
+    if (run.debugFolderPath) {
+      const debugFilePath = `${run.debugFolderPath}/${debugFileName}`;
+      await createDirForFile(debugFilePath, this.app.vault.adapter);
+      await this.app.vault.adapter.writeBinary(debugFilePath, await blob.arrayBuffer());
+      debugLog(`Snipd plugin: saved debug export to ${debugFilePath}`);
+    }
+    return blob;
+  }
+
+  private async checkTranscriptEligibility(episodeIds: string[]): Promise<CheckTranscriptEligibilityResponse | null> {
+    if (episodeIds.length === 0) {
+      return { episodes: {} };
+    }
+    try {
+      const response = await requestUrl({
+        url: `${API_BASE_URL}/obsidian/check-transcript-eligibility`,
+        method: 'POST',
+        headers: {
+          'Authorization': this.formatAuthorizationToken(this.settings.apiKey),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ episode_ids: episodeIds }),
+      });
+      if (response.status < 200 || response.status >= 300) {
+        debugLog('Snipd plugin: check-transcript-eligibility bad response:', response);
+        return null;
+      }
+      return response.json as CheckTranscriptEligibilityResponse;
+    } catch (e) {
+      debugLog('Snipd plugin: check-transcript-eligibility request failed:', e);
+      return null;
+    }
+  }
+
+  /**
+   * Transcripts are synced after the snip batches, not inside them, so a snip batch never
+   * carries hundreds of full transcripts. The pending list holds every snipped episode whose
+   * transcript is not known to be current; the eligibility check says which of those have a
+   * newer transcript the user may export, and only those are exported, in small batches.
+   * `force` ignores the re-check throttle. Returns the number of transcripts written, or null
+   * when the sync failed or was stopped.
+   */
+  private async syncPendingTranscripts(force: boolean, run: SyncRun): Promise<number | null> {
+    if (!this.settings.syncTranscripts) {
+      return 0;
+    }
+    const pending = this.settings.pendingTranscriptEpisodeIds ?? [];
+    if (pending.length === 0) {
+      return 0;
+    }
+
+    const checkedTs = this.settings.transcriptEligibilityCheckedTs ?? {};
+    const now = Date.now();
+    const lastChecked = (id: string) => (checkedTs[id] ? new Date(checkedTs[id]).getTime() : 0);
+    const toCheck = pending
+      .filter(id => force || now - lastChecked(id) >= TRANSCRIPT_ELIGIBILITY_RECHECK_MS)
+      .sort((a, b) => lastChecked(a) - lastChecked(b));
+    if (toCheck.length === 0) {
+      debugLog(`Snipd plugin: ${pending.length} pending transcripts, none due for re-check`);
+      return 0;
+    }
+
+    debugLog(`Snipd plugin: checking transcript eligibility for ${toCheck.length} of ${pending.length} pending episodes`);
+    this.setTranscriptSyncProgress({ phase: 'checking', episodeCount: toCheck.length });
+    this.setStatusBarPersistentMessage(`Checking transcripts for ${toCheck.length} episodes...`);
+    const results: CheckTranscriptEligibilityResponse['episodes'] = {};
+    for (let i = 0; i < toCheck.length; i += TRANSCRIPT_ELIGIBILITY_MAX_IDS) {
+      const result = await this.checkTranscriptEligibility(toCheck.slice(i, i + TRANSCRIPT_ELIGIBILITY_MAX_IDS));
+      if (run.signal.aborted) {
+        return null;
+      }
+      if (!result) {
+        debugLog('Snipd plugin: transcript eligibility check failed, retrying next sync');
+        return 0;
+      }
+      Object.assign(results, result.episodes);
+    }
+
+    const syncedTs = this.settings.episodeTranscriptsSyncedTs ?? {};
+    const pendingSet = new Set(pending);
+    const toExport: string[] = [];
+    const nowIso = new Date(now).toISOString();
+    for (const episodeId of toCheck) {
+      const entry = results[episodeId];
+      if (!entry) {
+        continue;
+      }
+      const ts = entry.transcript_update_ts;
+      if (ts) {
+        const localTs = syncedTs[episodeId];
+        if (localTs && new Date(ts) <= new Date(localTs)) {
+          pendingSet.delete(episodeId);
+          delete checkedTs[episodeId];
+        } else {
+          // Left unstamped and pending: a failed export is retried on the next sync.
+          toExport.push(episodeId);
+        }
+        continue;
+      }
+      // The callout ("premium only" / "not listened") goes only into notes that have no section
+      // yet; `no_transcript` ids get nothing but stay pending for when the episode is processed.
+      if (this.transcriptSectionNeeded.has(episodeId) && (entry.status === 'not_premium' || entry.status === 'not_listened')) {
+        toExport.push(episodeId);
+      }
+      checkedTs[episodeId] = nowIso;
+    }
+    // Stamps of ids that left the pending list would otherwise accumulate forever.
+    for (const episodeId of Object.keys(checkedTs)) {
+      if (!pendingSet.has(episodeId)) {
+        delete checkedTs[episodeId];
+      }
+    }
+    this.settings.pendingTranscriptEpisodeIds = Array.from(pendingSet);
+    this.settings.transcriptEligibilityCheckedTs = checkedTs;
+    await this.saveSettings();
+
+    if (toExport.length === 0) {
+      debugLog('Snipd plugin: no pending transcripts to export');
+      return 0;
+    }
+
+    const batchCount = Math.ceil(toExport.length / TRANSCRIPT_EXPORT_BATCH_SIZE);
+    debugLog(`Snipd plugin: exporting transcripts for ${toExport.length} episodes in ${batchCount} batches`);
+    // Snips changed since the last sync were already written by the snip batches; asking only
+    // for snips after the newest one seen keeps the export from appending them a second time.
+    const updatedAfter = this.settings.latestSyncedSnipUpdateTs ?? this.settings.last_updated_after;
+    let transcriptCount = 0;
+    for (let i = 0; i < batchCount; i++) {
+      if (run.signal.aborted) {
+        return null;
+      }
+      const episodeIds = toExport.slice(i * TRANSCRIPT_EXPORT_BATCH_SIZE, (i + 1) * TRANSCRIPT_EXPORT_BATCH_SIZE);
+      this.setTranscriptSyncProgress({ phase: 'exporting', batchIndex: i, totalBatches: batchCount, episodeCount: episodeIds.length });
+      this.setStatusBarPersistentMessage(`Syncing transcripts batch ${i + 1}/${batchCount} (${episodeIds.length} episodes)...`);
+      const blob = await this.requestExportZip(
+        this.buildExportRequestBody(episodeIds, { updatedAfter, includeTranscript: true, transcriptOnly: true }),
+        `Transcript sync at batch ${i + 1}`,
+        run,
+        `transcripts_${i}_${Date.now()}.zip`,
+      );
+      if (!blob) {
+        return null;
+      }
+      transcriptCount += (await this.processZipExport(blob)).transcriptCount;
+    }
+    return transcriptCount;
+  }
+
+  private setTranscriptSyncProgress(progress: TranscriptSyncProgress): void {
+    this.transcriptSyncProgress = progress;
+    if (this.settingsTab) {
+      this.settingsTab.display();
+    }
   }
 
   private async processSingleBatch(
     batchIndex: number,
     batch: { episodes: EpisodeSnipMetadata[] },
     totalBatches: number,
-    debugFolderPath: string | null
-  ): Promise<{ episodeCount: number; snipCount: number } | null> {
+    run: SyncRun,
+  ): Promise<SyncStats | null> {
     const snipdDirExists = await this.checkSnipdDirectoryExists();
     if (!snipdDirExists && (this.settings.fileHashMap && Object.keys(this.settings.fileHashMap).length > 0)) {
       debugLog('Snipd plugin: Snipd directory not found during batch processing, restarting sync from scratch');
@@ -486,83 +753,89 @@ export default class SnipdPlugin extends Plugin {
     debugLog(`Snipd plugin: processing batch ${batchIndex + 1}/${totalBatches} with ${episodeIds.length} episodes`);
     this.setStatusBarPersistentMessage(`Syncing batch ${batchIndex + 1}/${totalBatches} (${episodeIds.length} episodes, ${batchSnipCount} snips)...`);
 
-    let response;
-    try {
-      const requestBody = this.buildBatchRequestBody(episodeIds);
-      response = await requestUrl({
-        url: `${API_BASE_URL}/obsidian/export-episode-snips`,
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${this.settings.apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-      });
-    } catch (e) {
-      debugLog("Snipd plugin: request failed for batch: ", e);
-      const errorResponse = this.extractResponseFromError(e);
-      const errorMsg = this.formatApiErrorMessage(e, errorResponse, `Sync at batch ${batchIndex + 1}`);
-      await this.handleSyncError(errorMsg);
-      return null;
+    const stats: SyncStats = { episodeCount: 0, snipCount: 0, transcriptCount: 0 };
+    const requests = this.splitBatchRequests(episodeIds);
+    for (let i = 0; i < requests.length; i++) {
+      if (run.signal.aborted) {
+        return null;
+      }
+      const request = requests[i];
+      if (requests.length > 1) {
+        this.setStatusBarPersistentMessage(`Syncing batch ${batchIndex + 1}/${totalBatches}, part ${i + 1}/${requests.length} (${request.episodeIds.length} episodes${request.includeTranscript ? ', with transcripts' : ''})...`);
+      }
+      const blob = await this.requestExportZip(
+        this.buildExportRequestBody(request.episodeIds, { updatedAfter: this.settings.last_updated_after, includeTranscript: request.includeTranscript }),
+        `Sync at batch ${batchIndex + 1}`,
+        run,
+        `batch_${batchIndex}_${i}_${Date.now()}.zip`,
+      );
+      if (!blob) {
+        return null;
+      }
+      const partStats = await this.processZipExport(blob);
+      stats.episodeCount += partStats.episodeCount;
+      stats.snipCount += partStats.snipCount;
+      stats.transcriptCount += partStats.transcriptCount;
     }
 
-    if (response && response.status >= 200 && response.status < 300) {
-      const arrayBuffer = response.arrayBuffer;
-      const blob = new Blob([arrayBuffer]);
-      
-      if (debugFolderPath) {
-        const batchFileName = `batch_${batchIndex}_${Date.now()}.zip`;
-        const batchFilePath = `${debugFolderPath}/${batchFileName}`;
-        await createDirForFile(batchFilePath, this.app.vault.adapter);
-        const arrayBuffer = await blob.arrayBuffer();
-        await this.app.vault.adapter.writeBinary(batchFilePath, arrayBuffer);
-        debugLog(`Snipd plugin: saved debug batch to ${batchFilePath}`);
-      }
-      
-      const stats = await this.processZipExport(blob);
-      
-      this.settings.current_export_batch_index = batchIndex + 1;
-      await this.saveSettings();
-      
-      if (this.settingsTab) {
-        this.settingsTab.display();
-      }
+    this.settings.current_export_batch_index = batchIndex + 1;
+    await this.saveSettings();
 
-      return stats;
-    } else {
-      debugLog("Snipd plugin: bad response for batch: ", response);
-      const errorMsg = this.formatApiErrorMessage(null, response, `Sync at batch ${batchIndex + 1}`);
-      await this.handleSyncError(errorMsg);
-      return null;
+    if (this.settingsTab) {
+      this.settingsTab.display();
     }
+
+    return stats;
+  }
+
+  /**
+   * Episodes the plugin has never written get their transcript in the same zip as their snips,
+   * so a new note is written once; those requests are kept small because each carries full
+   * transcripts. Episodes with an existing note get snips only, and the transcript phase
+   * afterwards handles the transcript separately.
+   */
+  private splitBatchRequests(episodeIds: string[]): Array<{ episodeIds: string[]; includeTranscript: boolean }> {
+    if (!this.settings.syncTranscripts) {
+      return [{ episodeIds, includeTranscript: false }];
+    }
+    const synced = this.settings.episodeTranscriptsSyncedTs ?? {};
+    const pending = new Set(this.settings.pendingTranscriptEpisodeIds ?? []);
+    const known = episodeIds.filter(id => synced[id] !== undefined || pending.has(id));
+    const unseen = episodeIds.filter(id => synced[id] === undefined && !pending.has(id));
+    const requests: Array<{ episodeIds: string[]; includeTranscript: boolean }> = [];
+    if (known.length > 0) {
+      requests.push({ episodeIds: known, includeTranscript: false });
+    }
+    for (let i = 0; i < unseen.length; i += TRANSCRIPT_EXPORT_BATCH_SIZE) {
+      requests.push({ episodeIds: unseen.slice(i, i + TRANSCRIPT_EXPORT_BATCH_SIZE), includeTranscript: true });
+    }
+    return requests;
   }
 
   private async processAllBatches(
     metadata: FetchExportMetadataResponse,
-    debugFolderPath: string | null
-  ): Promise<{ episodeCount: number; snipCount: number } | null> {
-    let totalEpisodes = 0;
-    let totalSnips = 0;
+    run: SyncRun,
+  ): Promise<SyncStats | null> {
+    const totals: SyncStats = { episodeCount: 0, snipCount: 0, transcriptCount: 0 };
 
     try {
-      if (metadata.episode_batch_count === 0) {
-        debugLog('Snipd plugin: no new data to sync');
-        this.notice("No new data to sync", true, 2, true);
-      }
-
       for (let i = this.settings.current_export_batch_index; i < metadata.episode_batch_count; i++) {
+        if (run.signal.aborted) {
+          return null;
+        }
         const batch = metadata.episode_batches[i];
-        const stats = await this.processSingleBatch(i, batch, metadata.episode_batch_count, debugFolderPath);
+        const stats = await this.processSingleBatch(i, batch, metadata.episode_batch_count, run);
         
         if (!stats) {
           return null;
         }
 
-        totalEpisodes += stats.episodeCount;
-        totalSnips += stats.snipCount;
+        totals.episodeCount += stats.episodeCount;
+        totals.snipCount += stats.snipCount;
+        totals.transcriptCount += stats.transcriptCount;
       }
 
-      return { episodeCount: totalEpisodes, snipCount: totalSnips };
+      return totals;
     } catch (e) {
       debugLog("Snipd plugin: error processing batches: ", e);
       const errorMsg = "Sync failed: error processing data." + (isDev() ? ` Detail: ${e}` : "");
@@ -571,7 +844,7 @@ export default class SnipdPlugin extends Plugin {
     }
   }
 
-  private async finalizeSync(totalEpisodes: number, totalSnips: number): Promise<void> {
+  private async finalizeSync(stats: SyncStats): Promise<void> {
     this.settings.last_updated_after = this.settings.latestSyncedSnipUpdateTs || null;
     this.settings.current_export_updated_after = null;
     this.settings.current_export_batch_index = 0;
@@ -579,18 +852,23 @@ export default class SnipdPlugin extends Plugin {
     this.settings.current_batch_episode_count = 0;
     this.settings.current_batch_snip_count = 0;
     this.settings.lastSyncTimestamp = new Date().toISOString();
-    this.settings.lastSyncEpisodeCount = totalEpisodes;
-    this.settings.lastSyncSnipCount = totalSnips;
+    this.settings.lastSyncEpisodeCount = stats.episodeCount;
+    this.settings.lastSyncSnipCount = stats.snipCount;
+    this.settings.lastSyncTranscriptCount = stats.transcriptCount;
     this.settings.hasCompletedFirstSync = true;
     await this.deleteMetadataFile();
     await this.saveSettings();
 
     await this.clearSettingsAfterRun();
     
-    if (totalEpisodes === 0 && totalSnips === 0) {
+    const summary = formatSyncCounts(stats.episodeCount, stats.snipCount, stats.transcriptCount);
+    if (!summary) {
+      debugLog('Snipd plugin: sync completed (no new data)');
+      this.notice("No new data to sync", true, 2, true);
       this.setStatusBarPersistentMessage("Snipd sync completed (no new data)");
     } else {
-      this.setStatusBarPersistentMessage(`Snipd sync completed (${totalEpisodes} episodes, ${totalSnips} snips)`);
+      debugLog(`Snipd plugin: sync completed (${summary})`);
+      this.setStatusBarPersistentMessage(`Snipd sync completed (${summary})`);
     }
     
     this.clearStatusBarPersistentMessageAfterDelay(3000);
@@ -640,7 +918,7 @@ export default class SnipdPlugin extends Plugin {
         url: url,
         method: 'GET',
         headers: {
-          'Authorization': `Bearer ${this.settings.apiKey}`,
+          'Authorization': this.formatAuthorizationToken(this.settings.apiKey),
         },
       });
       debugLog(`Snipd plugin: test metadata response status: ${response.status}`);
@@ -706,36 +984,16 @@ export default class SnipdPlugin extends Plugin {
 
       let exportResponse;
       try {
-        const exportRequestBody: {
-          episode_ids: string[];
-          episode_template: string;
-          snip_template: string;
-          additional_properties?: Array<{ name: string; template: string; displayName?: string; }>;
-          only_edited_snips?: boolean;
-        } = {
-          episode_ids: episodeIds,
-          episode_template: this.settings.episodeTemplate ?? DEFAULT_EPISODE_TEMPLATE,
-          snip_template: this.settings.snipTemplate ?? DEFAULT_SNIP_TEMPLATE,
-        };
-        
-        const additionalProps = this.settings.additionalProperties;
-        if (isValidAdditionalProperties(additionalProps)) {
-          exportRequestBody.additional_properties = additionalProps.map((prop) => ({
-            name: prop.name.trim(),
-            template: prop.template.trim(),
-            ...(prop.displayName?.trim() ? { displayName: prop.displayName.trim() } : {}),
-          }));
-        }
-        
-        if (this.settings.onlyEditedSnips) {
-          exportRequestBody.only_edited_snips = true;
-        }
-        
+        const exportRequestBody = this.buildExportRequestBody(episodeIds, {
+          updatedAfter: null,
+          includeTranscript: this.settings.syncTranscripts,
+        });
+
         exportResponse = await requestUrl({
           url: `${API_BASE_URL}/obsidian/export-episode-snips`,
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${this.settings.apiKey}`,
+            'Authorization': this.formatAuthorizationToken(this.settings.apiKey),
             'Content-Type': 'application/json',
           },
           body: JSON.stringify(exportRequestBody),
@@ -771,8 +1029,8 @@ export default class SnipdPlugin extends Plugin {
         this.settings.snipdDir = testDir;
         
         await this.fetchAndSaveBaseFileForTest(testDir);
-        
-        const stats = await this.processZipExport(blob);
+
+        const stats = await this.processZipExport(blob, { trackTranscriptState: false });
         
         
         debugLog(`Snipd plugin: test sync requested ${episodeIds.length} episodes, received ${stats.episodeCount} episodes`);
@@ -788,7 +1046,7 @@ export default class SnipdPlugin extends Plugin {
           this.settingsTab.display();
         }
         
-        this.setStatusBarPersistentMessage(`Test sync completed (${stats.episodeCount} episodes, ${stats.snipCount} snips)`);
+        this.setStatusBarPersistentMessage(`Test sync completed (${formatSyncCounts(stats.episodeCount, stats.snipCount, stats.transcriptCount) || 'no data'})`);
         this.clearStatusBarPersistentMessageAfterDelay(3000);
       } else {
         debugLog("Snipd plugin: bad response for test export: ", exportResponse);
@@ -814,7 +1072,12 @@ export default class SnipdPlugin extends Plugin {
     }
   }
 
-  async processZipExport(blob: Blob): Promise<{ episodeCount: number; snipCount: number }> {
+  /** Test syncs write outside the real folder, so they must not record transcript sync state. */
+  async processZipExport(
+    blob: Blob,
+    options: { trackTranscriptState?: boolean } = {},
+  ): Promise<SyncStats> {
+    const trackTranscriptState = options.trackTranscriptState !== false;
     this.fs = this.app.vault.adapter;
 
     const blobReader = new zip.BlobReader(blob);
@@ -822,7 +1085,7 @@ export default class SnipdPlugin extends Plugin {
     const entries = await zipReader.getEntries();
 
     let metadata: MetadataJson | null = null;
-    const episodeFiles: Map<string, { full: string; append?: string }> = new Map();
+    const episodeFiles: Map<string, { full: string; append?: string; transcriptBlock?: string }> = new Map();
 
     for (const entry of entries) {
       // @ts-ignore - zip.js types are incomplete
@@ -850,6 +1113,16 @@ export default class SnipdPlugin extends Plugin {
             fileData.append = fileContent;
           }
         }
+      } else if (zipEntry.filename.startsWith('transcripts/')) {
+        const filename = zipEntry.filename.replace('transcripts/', '');
+        const match = filename.match(/^(.+?)_transcript_block\.md$/);
+        if (match) {
+          const [, id] = match;
+          if (!episodeFiles.has(id)) {
+            episodeFiles.set(id, { full: '' });
+          }
+          episodeFiles.get(id)!.transcriptBlock = fileContent;
+        }
       }
     }
 
@@ -866,33 +1139,224 @@ export default class SnipdPlugin extends Plugin {
     const showsData = metadata?.shows_data || {};
     const episodesData = metadata?.episodes_data || {};
 
+    if (metadata) {
+      let withTranscriptTs = 0;
+      let withTranscriptBlockFile = 0;
+      let withoutTranscriptTs = 0;
+      for (const epId of Object.keys(episodesData)) {
+        const epData = episodesData[epId];
+        if (epData?.transcript_update_ts) {
+          withTranscriptTs++;
+        } else {
+          withoutTranscriptTs++;
+        }
+        if (epData?.has_transcript_block_file) {
+          withTranscriptBlockFile++;
+        }
+      }
+      debugLog(`Snipd plugin: zip metadata transcript stats - ${withTranscriptTs} episodes with transcript_update_ts, ${withoutTranscriptTs} without, ${withTranscriptBlockFile} with has_transcript_block_file flag`);
+    }
+
     let episodeCount = 0;
     let snipCount = 0;
+    let settingsDirty = false;
+    let transcriptsWrittenCount = 0;
+    let transcriptBlocksReceivedCount = 0;
+
+    if (!this.settings.pendingTranscriptEpisodeIds) {
+      this.settings.pendingTranscriptEpisodeIds = [];
+    }
+    const pendingSet = new Set<string>(this.settings.pendingTranscriptEpisodeIds);
+    const pendingBefore = pendingSet.size;
 
     for (const [episodeId, fileData] of episodeFiles) {
       const episodeData = episodesData[episodeId];
       if (!episodeData) {
         debugLog(`Snipd plugin: No metadata found for episode ${episodeId}`);
       }
+
+      const hasTranscriptBlock = !!fileData.transcriptBlock;
+      if (hasTranscriptBlock) {
+        transcriptBlocksReceivedCount++;
+      }
+
       const episodeName = generateEpisodeFileName(episodeData, episodeId, this.settings);
       const showId = episodeData?.show_id;
       const showName = showId && showsData[showId] ? showsData[showId].name : 'Unknown Show';
 
-      await this.syncFile(
+      // Callouts ("premium only", "not listened") arrive under the same transcripts/ file
+      // name as real transcripts; only has_transcript_block_file tells them apart.
+      const isFullTranscript = episodeData?.has_transcript_block_file === true;
+      const transcriptWriteResult = await this.syncFile(
         fileData.full,
         fileData.append,
         sanitizeFileName(episodeName),
         sanitizeFileName(showName),
-        episodeData?.total_snip_count
+        episodeData?.total_snip_count,
+        isFullTranscript ? fileData.transcriptBlock : undefined,
+        isFullTranscript ? undefined : fileData.transcriptBlock,
       );
-      
+
+      if (transcriptWriteResult.transcriptWritten) {
+        transcriptsWrittenCount++;
+      }
+
+      const epTranscriptTs = episodeData?.transcript_update_ts ?? null;
+      if (!trackTranscriptState) {
+        // Test sync: the transcript went to the -TEST folder, the real note still needs it.
+      } else if (transcriptWriteResult.transcriptWritten && epTranscriptTs) {
+        if (!this.settings.episodeTranscriptsSyncedTs) {
+          this.settings.episodeTranscriptsSyncedTs = {};
+        }
+        this.settings.episodeTranscriptsSyncedTs[episodeId] = epTranscriptTs;
+        settingsDirty = true;
+        if (pendingSet.delete(episodeId)) {
+          settingsDirty = true;
+        }
+        if (this.settings.transcriptEligibilityCheckedTs?.[episodeId]) {
+          delete this.settings.transcriptEligibilityCheckedTs[episodeId];
+        }
+      } else if (this.settings.syncTranscripts && (episodeData?.updated_snip_count ?? 0) > 0) {
+        if (!pendingSet.has(episodeId)) {
+          pendingSet.add(episodeId);
+          settingsDirty = true;
+        }
+        if (!transcriptWriteResult.hasTranscriptSection) {
+          // The note is new or was recreated: forget what was synced for it so the transcript
+          // phase fetches the transcript or callout again.
+          this.transcriptSectionNeeded.add(episodeId);
+          if (this.settings.episodeTranscriptsSyncedTs?.[episodeId]) {
+            delete this.settings.episodeTranscriptsSyncedTs[episodeId];
+            settingsDirty = true;
+          }
+          if (this.settings.transcriptEligibilityCheckedTs?.[episodeId]) {
+            delete this.settings.transcriptEligibilityCheckedTs[episodeId];
+            settingsDirty = true;
+          }
+        }
+      }
+
       if (episodeData?.updated_snip_count) {
         snipCount += episodeData.updated_snip_count;
         episodeCount++;
       }
     }
 
-    return { episodeCount, snipCount };
+    if (pendingSet.size !== pendingBefore) {
+      this.settings.pendingTranscriptEpisodeIds = Array.from(pendingSet);
+      debugLog(`Snipd plugin: pending transcript list changed ${pendingBefore} -> ${pendingSet.size}`);
+    }
+
+    debugLog(`Snipd plugin: batch processed - ${episodeFiles.size} episodes in zip, ${episodeCount} with updated snips, ${snipCount} snips, ${transcriptBlocksReceivedCount} transcript blocks received, ${transcriptsWrittenCount} transcripts written`);
+
+    if (settingsDirty) {
+      await this.saveSettings();
+    }
+
+    return { episodeCount, snipCount, transcriptCount: transcriptsWrittenCount };
+  }
+
+  private spliceBeforeTranscriptHeader(existingContent: string, newSnipsBlock: string): string {
+    const idx = this.findTranscriptHeaderIndex(existingContent);
+    if (idx < 0) {
+      return existingContent.trimEnd() + '\n' + newSnipsBlock;
+    }
+    return existingContent.slice(0, idx) + newSnipsBlock + (newSnipsBlock.endsWith('\n') ? '' : '\n') + existingContent.slice(idx);
+  }
+
+  /** Replaces everything from the transcript header to EOF; the Snipd footer stays the last line. */
+  private replaceTranscriptSection(existingContent: string, newBlock: string): string {
+    const existingWithoutFooter = this.extractSnipdFooter(existingContent);
+    const newBlockWithoutFooter = this.extractSnipdFooter(newBlock);
+    const footer = existingWithoutFooter.footer ?? newBlockWithoutFooter.footer;
+    const idx = this.findTranscriptHeaderIndex(existingWithoutFooter.body);
+    const beforeTranscript = idx < 0 ? existingWithoutFooter.body : existingWithoutFooter.body.slice(0, idx);
+    const beforeStripped = this.stripTrailingDividers(beforeTranscript);
+    const newBlockStripped = this.stripTrailingDividers(newBlockWithoutFooter.body);
+    let result = beforeStripped + '\n\n---\n\n' + newBlockStripped;
+    if (footer) {
+      result += '\n\n---\n\n' + footer;
+    }
+    return result + '\n';
+  }
+
+  /**
+   * A full rewrite from the server carries no transcript section when the transcript was
+   * already synced, or only a callout when the user lost access (premium lapsed);
+   * keep the transcript in the existing file instead of silently dropping it.
+   */
+  private preserveExistingTranscript(newContent: string, existingContent: string): string {
+    const existingIdx = this.findTranscriptHeaderIndex(existingContent);
+    if (existingIdx < 0) {
+      return newContent;
+    }
+    const existingTranscriptSection = existingContent.slice(existingIdx);
+    if (this.isTranscriptCallout(existingTranscriptSection)) {
+      return newContent;
+    }
+    const newIdx = this.findTranscriptHeaderIndex(newContent);
+    if (newIdx >= 0 && !this.isTranscriptCallout(newContent.slice(newIdx))) {
+      return newContent;
+    }
+    debugLog('Snipd plugin: preserving existing transcript section during full rewrite');
+    return this.replaceTranscriptSection(newContent, existingTranscriptSection);
+  }
+
+  /** Returns null when the file holds a real transcript, which a callout must never replace. */
+  private applyTranscriptCallout(content: string, callout: string): string | null {
+    const idx = this.findTranscriptHeaderIndex(content);
+    if (idx >= 0 && !this.isTranscriptCallout(content.slice(idx))) {
+      return null;
+    }
+    return this.replaceTranscriptSection(content, callout);
+  }
+
+  /**
+   * The backend renders "premium only" / "not listened" placeholders as the transcript header
+   * followed by a single blockquote; transcript lines never start with `>`.
+   */
+  private isTranscriptCallout(transcriptSection: string): boolean {
+    const body = this.stripTrailingDividers(this.extractSnipdFooter(transcriptSection).body);
+    const lines = body.split('\n').slice(1).map(line => line.trim()).filter(line => line !== '');
+    return lines.length > 0 && lines.every(line => line.startsWith('>'));
+  }
+
+  private findTranscriptHeaderIndex(content: string): number {
+    // Whole-line match only: the header text can also occur inside snip content.
+    const lines = content.split('\n');
+    let offset = 0;
+    for (const line of lines) {
+      if (line.trim() === TRANSCRIPT_HEADER) {
+        return offset;
+      }
+      offset += line.length + 1;
+    }
+    return -1;
+  }
+
+  private extractSnipdFooter(content: string): { body: string; footer: string | null } {
+    const lines = content.split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (lines[i].trim() === SNIPD_FOOTER) {
+        lines.splice(i, 1);
+        return { body: lines.join('\n'), footer: SNIPD_FOOTER };
+      }
+    }
+    return { body: content, footer: null };
+  }
+
+  private stripTrailingDividers(content: string): string {
+    const lines = content.replace(/\s+$/, '').split('\n');
+    let i = lines.length - 1;
+    while (i >= 0) {
+      const trimmed = lines[i].trim();
+      if (trimmed === '' || trimmed === '---') {
+        i--;
+      } else {
+        break;
+      }
+    }
+    return lines.slice(0, i + 1).join('\n');
   }
 
   private updateSnipsCountInFrontmatter(content: string, snipsCount: number): string {
@@ -922,39 +1386,73 @@ export default class SnipdPlugin extends Plugin {
     appendContent: string | undefined,
     entityName: string,
     showName: string,
-    totalSnipCount?: number
-  ) {
+    totalSnipCount?: number,
+    transcriptBlock?: string,
+    transcriptCallout?: string,
+  ): Promise<{ transcriptWritten: boolean; hasTranscriptSection: boolean }> {
     const targetPath = normalizePath(`${this.settings.snipdDir}/Data/${showName}/${entityName}.md`);
 
     await createDirForFile(targetPath, this.fs);
 
     let contentToWrite: string;
+    let transcriptWritten = false;
     const isAppendOnlyFile = this.settings.appendOnlyFiles[targetPath];
+    const targetExists = await this.fs.exists(targetPath);
 
-    if (await this.fs.exists(targetPath)) {
+    if (targetExists) {
       const existingContent = await this.fs.read(targetPath);
       const existingHash = Md5.hashStr(existingContent).toString();
       const storedHash = this.settings.fileHashMap[targetPath];
 
-      if (existingHash === storedHash && !isAppendOnlyFile) {
-        contentToWrite = fullContent;
-      } else {
+      if (fullContent && existingHash === storedHash && !isAppendOnlyFile) {
+        contentToWrite = transcriptBlock ? fullContent : this.preserveExistingTranscript(fullContent, existingContent);
+        transcriptWritten = !!transcriptBlock;
+        debugLog(`Snipd plugin: syncFile full-rewrite path for ${entityName} (hasTranscriptBlock=${!!transcriptBlock})`);
+      } else if (appendContent) {
         if (!isAppendOnlyFile) {
           this.settings.appendOnlyFiles[targetPath] = true;
         }
-        
-        if (appendContent) {
-          contentToWrite = existingContent.trimEnd() + "\n" + appendContent;
-          
-          if (totalSnipCount !== undefined) {
-            contentToWrite = this.updateSnipsCountInFrontmatter(contentToWrite, totalSnipCount);
-          }
-        } else {
-          contentToWrite = fullContent;
+        const merged = this.spliceBeforeTranscriptHeader(existingContent, appendContent);
+        contentToWrite = totalSnipCount !== undefined
+          ? this.updateSnipsCountInFrontmatter(merged, totalSnipCount)
+          : merged;
+
+        if (transcriptBlock) {
+          contentToWrite = this.replaceTranscriptSection(contentToWrite, transcriptBlock);
+          transcriptWritten = true;
+        } else if (transcriptCallout) {
+          contentToWrite = this.applyTranscriptCallout(contentToWrite, transcriptCallout) ?? contentToWrite;
         }
+        debugLog(`Snipd plugin: syncFile append path for ${entityName} (hasTranscriptBlock=${!!transcriptBlock})`);
+      } else if (transcriptBlock) {
+        contentToWrite = this.replaceTranscriptSection(existingContent, transcriptBlock);
+        transcriptWritten = true;
+        debugLog(`Snipd plugin: syncFile transcript-only path for ${entityName}`);
+      } else if (transcriptCallout) {
+        const withCallout = this.applyTranscriptCallout(existingContent, transcriptCallout);
+        if (withCallout === null) {
+          debugLog(`Snipd plugin: syncFile keeping existing transcript over callout for ${entityName}`);
+          return { transcriptWritten: false, hasTranscriptSection: true };
+        }
+        contentToWrite = withCallout;
+        debugLog(`Snipd plugin: syncFile callout-only path for ${entityName}`);
+      } else if (fullContent) {
+        contentToWrite = this.preserveExistingTranscript(fullContent, existingContent);
+        debugLog(`Snipd plugin: syncFile full-rewrite fallback for ${entityName} (hashMismatch=${existingHash !== storedHash}, isAppendOnly=${!!isAppendOnlyFile})`);
+      } else {
+        debugLog(`Snipd plugin: syncFile nothing to write for ${entityName}`);
+        return { transcriptWritten: false, hasTranscriptSection: this.findTranscriptHeaderIndex(existingContent) >= 0 };
       }
-    } else {
+    } else if (fullContent) {
       contentToWrite = fullContent;
+      transcriptWritten = !!transcriptBlock;
+      debugLog(`Snipd plugin: syncFile new-file path for ${entityName} (hasTranscriptBlock=${!!transcriptBlock})`);
+    } else {
+      // A transcript block alone has no note to attach to.
+      if (transcriptBlock || transcriptCallout) {
+        debugLog(`Snipd plugin: skipping transcript-only write for missing target ${targetPath}`);
+      }
+      return { transcriptWritten: false, hasTranscriptSection: false };
     }
 
     await this.fs.write(targetPath, contentToWrite);
@@ -962,6 +1460,8 @@ export default class SnipdPlugin extends Plugin {
     const newHash = Md5.hashStr(contentToWrite).toString();
     this.settings.fileHashMap[targetPath] = newHash;
     await this.saveSettings();
+
+    return { transcriptWritten, hasTranscriptSection: this.findTranscriptHeaderIndex(contentToWrite) >= 0 };
   }
 
   async saveMetadataToFile(metadata: FetchExportMetadataResponse): Promise<void> {
@@ -1009,7 +1509,7 @@ export default class SnipdPlugin extends Plugin {
         url: `${API_BASE_URL}/obsidian/export-base-file`,
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${this.settings.apiKey}`,
+          'Authorization': this.formatAuthorizationToken(this.settings.apiKey),
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({}),
@@ -1157,7 +1657,7 @@ export default class SnipdPlugin extends Plugin {
         url: `${API_BASE_URL}/obsidian/export-base-file`,
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${this.settings.apiKey}`,
+          'Authorization': this.formatAuthorizationToken(this.settings.apiKey),
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({}),
@@ -1314,7 +1814,7 @@ export default class SnipdPlugin extends Plugin {
       id: 'snipd-sync',
       name: 'Sync now',
       callback: () => {
-        void this.syncSnipd();
+        void this.syncSnipd({ force: true });
       }
     });
 
@@ -1374,6 +1874,9 @@ export default class SnipdPlugin extends Plugin {
           this.settings.encryptedApiKey,
           this.getVaultIdentifier()
         );
+        if (this.settings.apiKey) {
+          this.encryptedApiKeySource = `${this.getVaultIdentifier()}\n${this.settings.apiKey}`;
+        }
       } catch (error) {
         debugLog('Snipd plugin: Failed to decrypt API key:', error);
         this.settings.apiKey = '';
@@ -1392,17 +1895,20 @@ export default class SnipdPlugin extends Plugin {
   }
 
   async saveSettings() {
-    if (this.settings.apiKey) {
+    const source = `${this.getVaultIdentifier()}\n${this.settings.apiKey}`;
+    if (this.settings.apiKey && source !== this.encryptedApiKeySource) {
       try {
         this.settings.encryptedApiKey = await SecureStorage.encryptApiKey(
           this.settings.apiKey,
           this.getVaultIdentifier()
         );
+        this.encryptedApiKeySource = source;
       } catch (error) {
         debugLog('Snipd plugin: Failed to encrypt API key:', error);
       }
     }
-    
+
+
     await this.persistSettings();
   }
 }
