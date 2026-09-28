@@ -6,10 +6,13 @@
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+		"check": "npm run build && npm run lint && npm run lint:css && node scripts/validate-release.mjs",
+		"check:release": "node scripts/validate-release.mjs",
 		"lint": "eslint .",
+		"lint:css": "stylelint styles.css",
 		"lint:fix": "eslint . --fix",
 		"version": "node version-bump.mjs && git add manifest.json versions.json",
-		"test:titles": "tsx scripts/test-sanitized-titles.ts"
+		"test:titles": "node --import tsx scripts/test-sanitized-titles.ts"
 	},
 	"keywords": [],
 	"author": "",
@@ -31,8 +34,10 @@
 		"@typescript-eslint/utils": "8.33.1",
 		"esbuild": "0.17.3",
 		"eslint": "^9.39.1",
-		"eslint-plugin-obsidianmd": "^0.1.9",
-		"obsidian": "latest",
+		"eslint-plugin-obsidianmd": "^0.4.2",
+		"obsidian": "^1.13.1",
+		"stylelint": "^17.15.0",
+		"stylelint-config-obsidianmd": "^0.1.0",
 		"tslib": "2.4.0",
 		"tsx": "^4.7.0",
 		"typescript": "4.8.4",

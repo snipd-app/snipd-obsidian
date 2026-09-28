@@ -48,6 +48,12 @@ Inside the plugin's settings, go to "Custom formatting" and click "Configure":
 - **Episode template**: Control how episode files are formatted
 - **Snip template**: Control how individual snips appear
 
+## Pre-submission checks
+
+Run `npm ci` followed by `npm run check` before tagging a release. This builds the plugin, runs Obsidian's official source and CSS lint rules, and checks that the version and release files are ready. For a specific tag, run `npm run check:release -- 1.3.1` after building.
+
+The Obsidian Community directory also offers **Review branch** on the plugin's management page. It previews the full hosted scan against a branch or commit before a release is published.
+
 ## Support & Feedback
 
 If you encounter any issues, have questions or want to pass along feature requests, please contact us via the in-app feedback button inside the Snipd mobile app.  

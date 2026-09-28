@@ -1,4 +1,5 @@
 import { App, Notice, normalizePath, PluginSettingTab, Setting, requestUrl } from 'obsidian';
+import type { SettingDefinitionItem } from 'obsidian';
 import type SnipdPlugin from './main';
 import { FormattingConfigModal } from './formatting_modal';
 import { DEFAULT_SETTINGS } from './types';
@@ -74,7 +75,7 @@ export class SnipdSettingModal extends PluginSettingTab {
       debugLog("Snipd plugin: successfully authenticated with Snipd");
       this.plugin.settings.apiKey = data.token;
       await this.plugin.saveSettings();
-      this.display();
+      this.refresh();
       new Notice("Successfully connected to Snipd");
     } else {
       debugLog("Snipd plugin: didn't get token data");
@@ -95,13 +96,8 @@ export class SnipdSettingModal extends PluginSettingTab {
     statusEl.addClass('snipd-error-text');
   }
 
-  display(): void {
-    this.plugin.settingsTab = this;
-    let { containerEl } = this;
-
-    containerEl.empty();
-    ;
-    containerEl.createEl('p', { text: 'Sync your Snipd content to you Obsidian vault' });
+  private renderConnectionAndStatus(containerEl: HTMLElement): void {
+    containerEl.createEl('p', { text: 'Sync your Snipd content to your Obsidian vault' });
 
     if (!this.plugin.settings.apiKey) {
       const authSection = containerEl.createDiv({ cls: 'snipd-auth-section' });
@@ -230,8 +226,189 @@ export class SnipdSettingModal extends PluginSettingTab {
         cls: 'snipd-sync-status-text'
       });
     }
+  }
 
-    ;
+  private scheduleRefresh(): void {
+    if (this.refreshInterval !== null) {
+      window.clearInterval(this.refreshInterval);
+      this.refreshInterval = null;
+    }
+    if (this.plugin.settings.isSyncing || this.plugin.settings.isTestSyncing) {
+      this.refreshInterval = window.setInterval(() => this.refresh(), 1000);
+    }
+  }
+
+  refresh(): void {
+    if (typeof this.update === 'function') {
+      this.update();
+    } else {
+      // Obsidian versions before 1.13 only support the imperative settings tab.
+      (this as { display: () => void }).display();
+    }
+  }
+
+  getSettingDefinitions(): SettingDefinitionItem[] {
+    const connected = () => Boolean(this.plugin.settings.apiKey);
+    return [
+      {
+        name: 'Connection and sync status',
+        aliases: ['Connect to Snipd', 'Sync now', 'Stop syncing'],
+        render: setting => {
+          this.plugin.settingsTab = this;
+          setting.settingEl.addClass('snipd-status-setting');
+          this.renderConnectionAndStatus(setting.controlEl);
+          this.scheduleRefresh();
+        },
+      },
+      {
+        name: 'Base folder',
+        desc: 'Folder where Snipd content will be saved',
+        visible: connected,
+        render: setting => void setting.addText(text => text
+          .setPlaceholder('Snipd')
+          .setValue(this.plugin.settings.snipdDir)
+          .onChange(async value => {
+            this.plugin.settings.snipdDir = normalizePath(value || 'Snipd');
+            await this.plugin.saveSettings();
+          })),
+      },
+      {
+        name: 'Sync frequency',
+        desc: 'Automatically sync at the specified interval',
+        visible: connected,
+        render: setting => void setting.addDropdown(dropdown => {
+          dropdown.addOption('0', 'Manual');
+          if (isDev()) dropdown.addOption('1', 'Every 1 minute (dev only)');
+          dropdown.addOption('60', 'Every 1 hour');
+          dropdown.addOption('720', 'Every 12 hours');
+          dropdown.addOption('1440', 'Every 24 hours');
+          dropdown.addOption('10080', 'Every week');
+          dropdown.setValue(this.plugin.settings.frequency);
+          dropdown.onChange(async value => {
+            this.plugin.settings.frequency = value;
+            await this.plugin.saveSettings();
+            if (this.plugin.settings.hasCompletedFirstSync) {
+              void this.plugin.configureSchedule();
+            }
+          });
+        }),
+      },
+      {
+        name: 'Sync on app launch',
+        desc: 'Automatically sync when Obsidian opens',
+        visible: connected,
+        render: setting => void setting.addToggle(toggle => toggle
+          .setValue(this.plugin.settings.triggerOnLoad)
+          .onChange(async value => {
+            this.plugin.settings.triggerOnLoad = value;
+            await this.plugin.saveSettings();
+          })),
+      },
+      {
+        name: 'Sync only edited snips',
+        desc: 'Only starred, edited or tagged snips will be synced',
+        visible: connected,
+        render: setting => void setting.addToggle(toggle => toggle
+          .setValue(this.plugin.settings.onlyEditedSnips)
+          .onChange(async value => {
+            this.plugin.settings.onlyEditedSnips = value;
+            await this.plugin.saveSettings();
+          })),
+      },
+      {
+        name: 'Sync full episode transcripts',
+        desc: 'Sync full episode transcripts for snipped episodes you have listened to or exported in the Snipd app',
+        visible: connected,
+        render: setting => void setting.addToggle(toggle => toggle
+          .setValue(this.plugin.settings.syncTranscripts)
+          .onChange(async value => {
+            this.plugin.settings.syncTranscripts = value;
+            await this.plugin.saveSettings();
+          })),
+      },
+      {
+        name: 'Custom formatting',
+        desc: 'Configure how episodes and snips are formatted',
+        visible: connected,
+        render: setting => void setting.addButton(button => button
+          .setButtonText('Configure')
+          .onClick(() => new FormattingConfigModal(this.app, this.plugin, () => {
+            new Notice('Formatting settings saved');
+          }).open())),
+      },
+      {
+        name: 'Test sync 5 random episodes',
+        desc: 'Test the sync with 5 random episodes from your snips to validate your configuration',
+        visible: connected,
+        render: setting => void setting.addButton(button => {
+          const busy = this.plugin.settings.isTestSyncing;
+          button.setButtonText(busy ? 'Syncing...' : 'Test sync');
+          button.setDisabled(busy);
+          if (!busy) button.onClick(() => void this.plugin.testSyncRandomEpisodes());
+        }),
+      },
+      {
+        name: 'Reset data and sync',
+        desc: 'Remove all sync data and trigger a new sync from scratch',
+        visible: connected,
+        render: setting => void setting.addButton(button => {
+          const busy = this.plugin.settings.isSyncing || this.plugin.settings.isTestSyncing;
+          button.setButtonText(busy ? 'Syncing...' : 'Reset & sync');
+          button.setDisabled(busy);
+          button.onClick(() => {
+            if (!activeWindow.confirm('This will remove all synced Snipd data from your vault and start a fresh sync. Continue?')) return;
+            button.setDisabled(true);
+            button.setButtonText('Resetting...');
+            void this.plugin.resetSyncAndResync().finally(() => {
+              button.setDisabled(false);
+              button.setButtonText('Reset & sync');
+            });
+          });
+        }),
+      },
+      {
+        type: 'group',
+        heading: 'Development',
+        visible: () => connected() && isDev(),
+        items: [
+          {
+            name: 'Save debug zips',
+            desc: 'Save all downloaded data from each sync for debugging purposes',
+            render: setting => void setting.addToggle(toggle => toggle
+              .setValue(this.plugin.settings.saveDebugZips)
+              .onChange(async value => {
+                this.plugin.settings.saveDebugZips = value;
+                await this.plugin.saveSettings();
+              })),
+          },
+          {
+            name: 'Reset settings state',
+            desc: 'Revert to the initial settings state',
+            render: setting => void setting.addButton(button => {
+              button.setButtonText('Reset');
+              button.buttonEl.addClass('snipd-reset-button');
+              button.onClick(async () => {
+                this.plugin.settings = Object.assign({}, DEFAULT_SETTINGS);
+                await this.plugin.saveSettings();
+                this.refresh();
+                new Notice('Settings have been reset to initial state');
+              });
+            }),
+          },
+        ],
+      },
+    ];
+  }
+
+  display(): void {
+    this.plugin.settingsTab = this;
+    let { containerEl } = this;
+
+    containerEl.empty();
+    this.renderConnectionAndStatus(containerEl);
+    if (!this.plugin.settings.apiKey) {
+      return;
+    }
 
     new Setting(containerEl)
       .setName('Base folder')
@@ -355,16 +532,7 @@ export class SnipdSettingModal extends PluginSettingTab {
         });
       });
 
-    if (this.refreshInterval !== null) {
-      window.clearInterval(this.refreshInterval);
-      this.refreshInterval = null;
-    }
-
-    if (this.plugin.settings.isSyncing || this.plugin.settings.isTestSyncing) {
-      this.refreshInterval = window.setInterval(() => {
-        this.display();
-      }, 1000);
-    }
+    this.scheduleRefresh();
 
     if (isDev()) {
       new Setting(containerEl).setName("Development").setHeading();
@@ -389,7 +557,7 @@ export class SnipdSettingModal extends PluginSettingTab {
           button.onClick(async () => {
             this.plugin.settings = Object.assign({}, DEFAULT_SETTINGS);
             await this.plugin.saveSettings();
-            this.display();
+            this.refresh();
             new Notice('Settings have been reset to initial state');
           });
         });

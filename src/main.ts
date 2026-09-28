@@ -182,7 +182,7 @@ export default class SnipdPlugin extends Plugin {
     this.transcriptSyncProgress = null;
     await this.saveSettings();
     if (this.settingsTab) {
-      this.settingsTab.display();
+      this.settingsTab.refresh();
     }
   }
 
@@ -303,7 +303,7 @@ export default class SnipdPlugin extends Plugin {
     await this.saveSettings();
 
     if (this.settingsTab) {
-      this.settingsTab.display();
+      this.settingsTab.refresh();
     }
 
     this.notice("Sync data reset. Starting fresh sync...", true, 0, true);
@@ -373,7 +373,7 @@ export default class SnipdPlugin extends Plugin {
     await this.saveSettings();
     
     if (this.settingsTab) {
-      this.settingsTab.display();
+      this.settingsTab.refresh();
     }
 
     this.notice("Snipd sync started...", true, 0, true);
@@ -446,7 +446,7 @@ export default class SnipdPlugin extends Plugin {
       await this.saveSettings();
       
       if (this.settingsTab) {
-        this.settingsTab.display();
+        this.settingsTab.refresh();
       }
 
       debugLog(`Snipd plugin: fetched metadata with ${metadata.episode_batch_count} batches`);
@@ -723,7 +723,7 @@ export default class SnipdPlugin extends Plugin {
   private setTranscriptSyncProgress(progress: TranscriptSyncProgress): void {
     this.transcriptSyncProgress = progress;
     if (this.settingsTab) {
-      this.settingsTab.display();
+      this.settingsTab.refresh();
     }
   }
 
@@ -782,7 +782,7 @@ export default class SnipdPlugin extends Plugin {
     await this.saveSettings();
 
     if (this.settingsTab) {
-      this.settingsTab.display();
+      this.settingsTab.refresh();
     }
 
     return stats;
@@ -890,7 +890,7 @@ export default class SnipdPlugin extends Plugin {
     await this.saveSettings();
     
     if (this.settingsTab) {
-      this.settingsTab.display();
+      this.settingsTab.refresh();
     }
 
     this.notice("Test sync started...", true, 0, true);
@@ -929,7 +929,7 @@ export default class SnipdPlugin extends Plugin {
       this.settings.isTestSyncing = false;
       await this.saveSettings();
       if (this.settingsTab) {
-        this.settingsTab.display();
+        this.settingsTab.refresh();
       }
       this.notice(errorMsg, true, 4, true);
       this.clearStatusBarPersistentMessage();
@@ -961,7 +961,7 @@ export default class SnipdPlugin extends Plugin {
         this.settings.isTestSyncing = false;
         await this.saveSettings();
         if (this.settingsTab) {
-          this.settingsTab.display();
+          this.settingsTab.refresh();
         }
         this.clearStatusBarPersistentMessage();
         return;
@@ -1005,7 +1005,7 @@ export default class SnipdPlugin extends Plugin {
         this.settings.isTestSyncing = false;
         await this.saveSettings();
         if (this.settingsTab) {
-          this.settingsTab.display();
+          this.settingsTab.refresh();
         }
         this.notice(errorMsg, true, 4, true);
         this.clearStatusBarPersistentMessage();
@@ -1043,7 +1043,7 @@ export default class SnipdPlugin extends Plugin {
         await this.saveSettings();
         
         if (this.settingsTab) {
-          this.settingsTab.display();
+          this.settingsTab.refresh();
         }
         
         this.setStatusBarPersistentMessage(`Test sync completed (${formatSyncCounts(stats.episodeCount, stats.snipCount, stats.transcriptCount) || 'no data'})`);
@@ -1054,7 +1054,7 @@ export default class SnipdPlugin extends Plugin {
         this.settings.isTestSyncing = false;
         await this.saveSettings();
         if (this.settingsTab) {
-          this.settingsTab.display();
+          this.settingsTab.refresh();
         }
         this.notice(errorMsg, true, 4, true);
         this.clearStatusBarPersistentMessage();
@@ -1065,7 +1065,7 @@ export default class SnipdPlugin extends Plugin {
       this.settings.isTestSyncing = false;
       await this.saveSettings();
       if (this.settingsTab) {
-        this.settingsTab.display();
+        this.settingsTab.refresh();
       }
       this.notice(errorMsg, true, 4, true);
       this.clearStatusBarPersistentMessage();
