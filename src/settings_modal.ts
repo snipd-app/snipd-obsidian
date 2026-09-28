@@ -1,4 +1,4 @@
-import { App, Notice, normalizePath, PluginSettingTab, Setting, requestUrl } from 'obsidian';
+import { App, Notice, normalizePath, PluginSettingTab, Setting, requestUrl, requireApiVersion } from 'obsidian';
 import type { SettingDefinitionItem } from 'obsidian';
 import type SnipdPlugin from './main';
 import { FormattingConfigModal } from './formatting_modal';
@@ -239,7 +239,7 @@ export class SnipdSettingModal extends PluginSettingTab {
   }
 
   refresh(): void {
-    if (typeof this.update === 'function') {
+    if (requireApiVersion('1.13.0')) {
       this.update();
     } else {
       // Obsidian versions before 1.13 only support the imperative settings tab.
