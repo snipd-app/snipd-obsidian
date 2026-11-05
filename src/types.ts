@@ -70,6 +70,7 @@ export const DEFAULT_SNIP_TEMPLATE = `### {{snip_favorite_star}} [{{snip_title}}
 
 export const DEFAULT_EPISODE_FILE_NAME_TEMPLATE = `{{episode_title}}`;
 
+// Every setting needs a default here: loadSettings drops saved keys that have none.
 export const DEFAULT_SETTINGS: SnipdPluginSettings = {
   apiKey: "",
   encryptedApiKey: "",

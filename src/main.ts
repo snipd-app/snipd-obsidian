@@ -11,8 +11,8 @@ import {
 import * as zip from "@zip.js/zip.js";
 // @ts-ignore
 import { Md5 } from "ts-md5";
-import { 
-  SnipdPluginSettings, 
+import {
+  SnipdPluginSettings,
   DEFAULT_SETTINGS,
   DEFAULT_EPISODE_TEMPLATE,
   DEFAULT_SNIP_TEMPLATE,
@@ -27,13 +27,31 @@ function isValidAdditionalProperties(
 ): props is Array<{ name: string; template: string; displayName?: string }> {
   return Array.isArray(props) && props.length > 0 && props.every((p) => !!p.name?.trim() && !!p.template?.trim());
 }
-import { generateEpisodeFileName, createDirForFile, isDev, debugLog } from './utils';
+import { generateEpisodeFileName, createDirForFile, isDev, debugLog, formatSyncCounts } from './utils';
 import { sanitizeFileName } from './sanitize_file_name';
 import { SnipdSettingModal } from './settings_modal';
 import { SecureStorage } from './secure_storage';
+import { preserveExistingTranscript, spliceBeforeTranscriptHeader } from './transcript_section';
 
 export const AUTH_URL = "https://app.snipd.com/obsidian/auth";
 export const API_BASE_URL = isDev() ? "http://0.0.0.0:8080/v1/public/api" : "https://api.snipd.com/v1/public/api";
+
+type ExportRequestBody = {
+  episode_ids: string[];
+  episode_template: string;
+  snip_template: string;
+  additional_properties?: Array<{ name: string; template: string; displayName?: string; }>;
+  updated_after?: string;
+  only_edited_snips?: boolean;
+};
+
+type SyncStats = { episodeCount: number; snipCount: number };
+
+/**
+ * `signal` belongs to this run, not to `syncAbortController`: Stop clears the controller and a new
+ * sync installs its own, so only the captured signal still tells this run it was stopped.
+ */
+type SyncRun = { signal: AbortSignal; debugFolderPath: string | null };
 
 export default class SnipdPlugin extends Plugin {
   settings: SnipdPluginSettings;
@@ -42,6 +60,15 @@ export default class SnipdPlugin extends Plugin {
   statusBar: StatusBar;
   settingsTab: SnipdSettingModal | null = null;
   syncAbortController: AbortController | null = null;
+  /**
+   * Vault id + key that `encryptedApiKey` currently encrypts. Encryption runs 100k PBKDF2
+   * iterations (~100 ms) and saveSettings is called once per synced note.
+   */
+  private encryptedApiKeySource: string | null = null;
+
+  private formatAuthorizationToken(apiKey: string): string {
+    return `Bearer ${apiKey}`;
+  }
 
   private extractResponseFromError(error: unknown): { status: number } | null {
     if (error && typeof error === 'object' && error !== null) {
@@ -134,7 +161,7 @@ export default class SnipdPlugin extends Plugin {
     this.syncAbortController = null;
     await this.saveSettings();
     if (this.settingsTab) {
-      this.settingsTab.display();
+      this.settingsTab.refresh();
     }
   }
 
@@ -251,7 +278,7 @@ export default class SnipdPlugin extends Plugin {
     await this.saveSettings();
 
     if (this.settingsTab) {
-      this.settingsTab.display();
+      this.settingsTab.refresh();
     }
 
     this.notice("Sync data reset. Starting fresh sync...", true, 0, true);
@@ -265,20 +292,22 @@ export default class SnipdPlugin extends Plugin {
 
     await this.checkAndHandleMissingDirectory();
 
-    const debugFolderPath = this.settings.saveDebugZips ? `snipd_plugin_debug/sync_${Date.now()}` : null;
-    await this.initializeSync();
+    const run: SyncRun = {
+      signal: await this.initializeSync(),
+      debugFolderPath: this.settings.saveDebugZips ? `snipd_plugin_debug/sync_${Date.now()}` : null,
+    };
 
-    const metadata = await this.fetchOrLoadMetadata(debugFolderPath);
-    if (!metadata) {
+    const metadata = await this.fetchOrLoadMetadata(run);
+    if (!metadata || run.signal.aborted) {
       return;
     }
 
-    const stats = await this.processAllBatches(metadata, debugFolderPath);
-    if (!stats) {
+    const stats = await this.processAllBatches(metadata, run);
+    if (!stats || run.signal.aborted) {
       return;
     }
 
-    await this.finalizeSync(stats.episodeCount, stats.snipCount);
+    await this.finalizeSync(stats);
   }
 
   private validateSyncPreconditions(): boolean {
@@ -304,18 +333,20 @@ export default class SnipdPlugin extends Plugin {
     }
   }
 
-  private async initializeSync(): Promise<void> {
+  private async initializeSync(): Promise<AbortSignal> {
     debugLog('Snipd plugin: starting sync...');
     this.settings.isSyncing = true;
-    this.syncAbortController = new AbortController();
+    const abortController = new AbortController();
+    this.syncAbortController = abortController;
     await this.saveSettings();
     
     if (this.settingsTab) {
-      this.settingsTab.display();
+      this.settingsTab.refresh();
     }
 
     this.notice("Snipd sync started...", true, 0, true);
     this.setStatusBarPersistentMessage("Snipd sync in progress...");
+    return abortController.signal;
   }
 
   private buildMetadataUrl(): string {
@@ -333,7 +364,7 @@ export default class SnipdPlugin extends Plugin {
     return url;
   }
 
-  private async fetchMetadataFromApi(debugFolderPath: string | null): Promise<FetchExportMetadataResponse | null> {
+  private async fetchMetadataFromApi(run: SyncRun): Promise<FetchExportMetadataResponse | null> {
     const url = this.buildMetadataUrl();
 
     let response;
@@ -344,11 +375,14 @@ export default class SnipdPlugin extends Plugin {
         url: url,
         method: 'GET',
         headers: {
-          'Authorization': `Bearer ${this.settings.apiKey}`,
+          'Authorization': this.formatAuthorizationToken(this.settings.apiKey),
         },
       });
       debugLog(`Snipd plugin: metadata response status: ${response.status}`);
     } catch (e) {
+      if (run.signal.aborted) {
+        return null;
+      }
       debugLog("Snipd plugin: request failed in syncSnipd: ", e);
       const errorResponse = this.extractResponseFromError(e);
       const errorMsg = this.formatApiErrorMessage(e, errorResponse, "Sync");
@@ -356,26 +390,31 @@ export default class SnipdPlugin extends Plugin {
       return null;
     }
 
+    if (run.signal.aborted) {
+      return null;
+    }
+
     if (response && response.status >= 200 && response.status < 300) {
       const metadata = response.json as FetchExportMetadataResponse;
+
       await this.saveMetadataToFile(metadata);
-      
-      if (debugFolderPath) {
-        await createDirForFile(`${debugFolderPath}/metadata.json`, this.app.vault.adapter);
+
+      if (run.debugFolderPath) {
+        await createDirForFile(`${run.debugFolderPath}/metadata.json`, this.app.vault.adapter);
         await this.app.vault.adapter.write(
-          `${debugFolderPath}/metadata.json`,
+          `${run.debugFolderPath}/metadata.json`,
           JSON.stringify(metadata, null, 2)
         );
-        debugLog(`Snipd plugin: saved debug metadata to ${debugFolderPath}/metadata.json`);
+        debugLog(`Snipd plugin: saved debug metadata to ${run.debugFolderPath}/metadata.json`);
       }
-      
+
       this.settings.current_export_updated_after = this.settings.latestSyncedSnipUpdateTs || null;
       this.settings.current_export_batch_index = 0;
       this.settings.current_export_total_batches = metadata.episode_batch_count;
       await this.saveSettings();
       
       if (this.settingsTab) {
-        this.settingsTab.display();
+        this.settingsTab.refresh();
       }
 
       debugLog(`Snipd plugin: fetched metadata with ${metadata.episode_batch_count} batches`);
@@ -396,9 +435,9 @@ export default class SnipdPlugin extends Plugin {
     }
   }
 
-  private async fetchOrLoadMetadata(debugFolderPath: string | null): Promise<FetchExportMetadataResponse | null> {
+  private async fetchOrLoadMetadata(run: SyncRun): Promise<FetchExportMetadataResponse | null> {
     if (!this.settings.current_export_updated_after) {
-      return await this.fetchMetadataFromApi(debugFolderPath);
+      return await this.fetchMetadataFromApi(run);
     } else {
       const loadedMetadata = await this.loadMetadataFromFile();
       if (!loadedMetadata) {
@@ -419,27 +458,13 @@ export default class SnipdPlugin extends Plugin {
     }
   }
 
-  private buildBatchRequestBody(episodeIds: string[]): {
-    episode_ids: string[];
-    episode_template?: string;
-    snip_template?: string;
-    additional_properties?: Array<{ name: string; template: string; displayName?: string; }>;
-    updated_after?: string;
-    only_edited_snips?: boolean;
-  } {
-    const requestBody: {
-      episode_ids: string[];
-      episode_template?: string;
-      snip_template?: string;
-      additional_properties?: Array<{ name: string; template: string; displayName?: string; }>;
-      updated_after?: string;
-      only_edited_snips?: boolean;
-    } = {
+  private buildExportRequestBody(episodeIds: string[], updatedAfter: string | null): ExportRequestBody {
+    const requestBody: ExportRequestBody = {
       episode_ids: episodeIds,
       episode_template: this.settings.episodeTemplate ?? DEFAULT_EPISODE_TEMPLATE,
       snip_template: this.settings.snipTemplate ?? DEFAULT_SNIP_TEMPLATE,
     };
-    
+
     const additionalProps = this.settings.additionalProperties;
     if (isValidAdditionalProperties(additionalProps)) {
       requestBody.additional_properties = additionalProps.map((prop) => ({
@@ -448,24 +473,76 @@ export default class SnipdPlugin extends Plugin {
         ...(prop.displayName?.trim() ? { displayName: prop.displayName.trim() } : {}),
       }));
     }
-    
-    if (this.settings.last_updated_after) {
-      requestBody.updated_after = this.settings.last_updated_after;
+
+    if (updatedAfter) {
+      requestBody.updated_after = updatedAfter;
     }
-    
+
     if (this.settings.onlyEditedSnips) {
       requestBody.only_edited_snips = true;
     }
-    
+
     return requestBody;
+  }
+
+  /**
+   * Returns null after reporting the failure through handleSyncError, or silently when the run was
+   * stopped meanwhile: a response that arrives after Stop must neither be written nor reported,
+   * since the error handling would also reset a sync started after the stop.
+   */
+  private async requestExportZip(
+    requestBody: ExportRequestBody,
+    context: string,
+    run: SyncRun,
+    debugFileName: string,
+  ): Promise<Blob | null> {
+    let response;
+    try {
+      response = await requestUrl({
+        url: `${API_BASE_URL}/obsidian/export-episode-snips`,
+        method: 'POST',
+        headers: {
+          'Authorization': this.formatAuthorizationToken(this.settings.apiKey),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      });
+    } catch (e) {
+      if (run.signal.aborted) {
+        return null;
+      }
+      debugLog(`Snipd plugin: request failed (${context}): `, e);
+      const errorResponse = this.extractResponseFromError(e);
+      await this.handleSyncError(this.formatApiErrorMessage(e, errorResponse, context));
+      return null;
+    }
+
+    if (run.signal.aborted) {
+      return null;
+    }
+
+    if (!response || response.status < 200 || response.status >= 300) {
+      debugLog(`Snipd plugin: bad response (${context}): `, response);
+      await this.handleSyncError(this.formatApiErrorMessage(null, response, context));
+      return null;
+    }
+
+    const blob = new Blob([response.arrayBuffer]);
+    if (run.debugFolderPath) {
+      const debugFilePath = `${run.debugFolderPath}/${debugFileName}`;
+      await createDirForFile(debugFilePath, this.app.vault.adapter);
+      await this.app.vault.adapter.writeBinary(debugFilePath, await blob.arrayBuffer());
+      debugLog(`Snipd plugin: saved debug export to ${debugFilePath}`);
+    }
+    return blob;
   }
 
   private async processSingleBatch(
     batchIndex: number,
     batch: { episodes: EpisodeSnipMetadata[] },
     totalBatches: number,
-    debugFolderPath: string | null
-  ): Promise<{ episodeCount: number; snipCount: number } | null> {
+    run: SyncRun,
+  ): Promise<SyncStats | null> {
     const snipdDirExists = await this.checkSnipdDirectoryExists();
     if (!snipdDirExists && (this.settings.fileHashMap && Object.keys(this.settings.fileHashMap).length > 0)) {
       debugLog('Snipd plugin: Snipd directory not found during batch processing, restarting sync from scratch');
@@ -486,83 +563,50 @@ export default class SnipdPlugin extends Plugin {
     debugLog(`Snipd plugin: processing batch ${batchIndex + 1}/${totalBatches} with ${episodeIds.length} episodes`);
     this.setStatusBarPersistentMessage(`Syncing batch ${batchIndex + 1}/${totalBatches} (${episodeIds.length} episodes, ${batchSnipCount} snips)...`);
 
-    let response;
-    try {
-      const requestBody = this.buildBatchRequestBody(episodeIds);
-      response = await requestUrl({
-        url: `${API_BASE_URL}/obsidian/export-episode-snips`,
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${this.settings.apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-      });
-    } catch (e) {
-      debugLog("Snipd plugin: request failed for batch: ", e);
-      const errorResponse = this.extractResponseFromError(e);
-      const errorMsg = this.formatApiErrorMessage(e, errorResponse, `Sync at batch ${batchIndex + 1}`);
-      await this.handleSyncError(errorMsg);
+    const blob = await this.requestExportZip(
+      this.buildExportRequestBody(episodeIds, this.settings.last_updated_after),
+      `Sync at batch ${batchIndex + 1}`,
+      run,
+      `batch_${batchIndex}_${Date.now()}.zip`,
+    );
+    if (!blob) {
       return null;
     }
+    const stats = await this.processZipExport(blob);
 
-    if (response && response.status >= 200 && response.status < 300) {
-      const arrayBuffer = response.arrayBuffer;
-      const blob = new Blob([arrayBuffer]);
-      
-      if (debugFolderPath) {
-        const batchFileName = `batch_${batchIndex}_${Date.now()}.zip`;
-        const batchFilePath = `${debugFolderPath}/${batchFileName}`;
-        await createDirForFile(batchFilePath, this.app.vault.adapter);
-        const arrayBuffer = await blob.arrayBuffer();
-        await this.app.vault.adapter.writeBinary(batchFilePath, arrayBuffer);
-        debugLog(`Snipd plugin: saved debug batch to ${batchFilePath}`);
-      }
-      
-      const stats = await this.processZipExport(blob);
-      
-      this.settings.current_export_batch_index = batchIndex + 1;
-      await this.saveSettings();
-      
-      if (this.settingsTab) {
-        this.settingsTab.display();
-      }
+    this.settings.current_export_batch_index = batchIndex + 1;
+    await this.saveSettings();
 
-      return stats;
-    } else {
-      debugLog("Snipd plugin: bad response for batch: ", response);
-      const errorMsg = this.formatApiErrorMessage(null, response, `Sync at batch ${batchIndex + 1}`);
-      await this.handleSyncError(errorMsg);
-      return null;
+    if (this.settingsTab) {
+      this.settingsTab.refresh();
     }
+
+    return stats;
   }
 
   private async processAllBatches(
     metadata: FetchExportMetadataResponse,
-    debugFolderPath: string | null
-  ): Promise<{ episodeCount: number; snipCount: number } | null> {
-    let totalEpisodes = 0;
-    let totalSnips = 0;
+    run: SyncRun,
+  ): Promise<SyncStats | null> {
+    const totals: SyncStats = { episodeCount: 0, snipCount: 0 };
 
     try {
-      if (metadata.episode_batch_count === 0) {
-        debugLog('Snipd plugin: no new data to sync');
-        this.notice("No new data to sync", true, 2, true);
-      }
-
       for (let i = this.settings.current_export_batch_index; i < metadata.episode_batch_count; i++) {
+        if (run.signal.aborted) {
+          return null;
+        }
         const batch = metadata.episode_batches[i];
-        const stats = await this.processSingleBatch(i, batch, metadata.episode_batch_count, debugFolderPath);
+        const stats = await this.processSingleBatch(i, batch, metadata.episode_batch_count, run);
         
         if (!stats) {
           return null;
         }
 
-        totalEpisodes += stats.episodeCount;
-        totalSnips += stats.snipCount;
+        totals.episodeCount += stats.episodeCount;
+        totals.snipCount += stats.snipCount;
       }
 
-      return { episodeCount: totalEpisodes, snipCount: totalSnips };
+      return totals;
     } catch (e) {
       debugLog("Snipd plugin: error processing batches: ", e);
       const errorMsg = "Sync failed: error processing data." + (isDev() ? ` Detail: ${e}` : "");
@@ -571,7 +615,7 @@ export default class SnipdPlugin extends Plugin {
     }
   }
 
-  private async finalizeSync(totalEpisodes: number, totalSnips: number): Promise<void> {
+  private async finalizeSync(stats: SyncStats): Promise<void> {
     this.settings.last_updated_after = this.settings.latestSyncedSnipUpdateTs || null;
     this.settings.current_export_updated_after = null;
     this.settings.current_export_batch_index = 0;
@@ -579,18 +623,22 @@ export default class SnipdPlugin extends Plugin {
     this.settings.current_batch_episode_count = 0;
     this.settings.current_batch_snip_count = 0;
     this.settings.lastSyncTimestamp = new Date().toISOString();
-    this.settings.lastSyncEpisodeCount = totalEpisodes;
-    this.settings.lastSyncSnipCount = totalSnips;
+    this.settings.lastSyncEpisodeCount = stats.episodeCount;
+    this.settings.lastSyncSnipCount = stats.snipCount;
     this.settings.hasCompletedFirstSync = true;
     await this.deleteMetadataFile();
     await this.saveSettings();
 
     await this.clearSettingsAfterRun();
     
-    if (totalEpisodes === 0 && totalSnips === 0) {
+    const summary = formatSyncCounts(stats.episodeCount, stats.snipCount);
+    if (!summary) {
+      debugLog('Snipd plugin: sync completed (no new data)');
+      this.notice("No new data to sync", true, 2, true);
       this.setStatusBarPersistentMessage("Snipd sync completed (no new data)");
     } else {
-      this.setStatusBarPersistentMessage(`Snipd sync completed (${totalEpisodes} episodes, ${totalSnips} snips)`);
+      debugLog(`Snipd plugin: sync completed (${summary})`);
+      this.setStatusBarPersistentMessage(`Snipd sync completed (${summary})`);
     }
     
     this.clearStatusBarPersistentMessageAfterDelay(3000);
@@ -612,7 +660,7 @@ export default class SnipdPlugin extends Plugin {
     await this.saveSettings();
     
     if (this.settingsTab) {
-      this.settingsTab.display();
+      this.settingsTab.refresh();
     }
 
     this.notice("Test sync started...", true, 0, true);
@@ -640,7 +688,7 @@ export default class SnipdPlugin extends Plugin {
         url: url,
         method: 'GET',
         headers: {
-          'Authorization': `Bearer ${this.settings.apiKey}`,
+          'Authorization': this.formatAuthorizationToken(this.settings.apiKey),
         },
       });
       debugLog(`Snipd plugin: test metadata response status: ${response.status}`);
@@ -651,7 +699,7 @@ export default class SnipdPlugin extends Plugin {
       this.settings.isTestSyncing = false;
       await this.saveSettings();
       if (this.settingsTab) {
-        this.settingsTab.display();
+        this.settingsTab.refresh();
       }
       this.notice(errorMsg, true, 4, true);
       this.clearStatusBarPersistentMessage();
@@ -683,7 +731,7 @@ export default class SnipdPlugin extends Plugin {
         this.settings.isTestSyncing = false;
         await this.saveSettings();
         if (this.settingsTab) {
-          this.settingsTab.display();
+          this.settingsTab.refresh();
         }
         this.clearStatusBarPersistentMessage();
         return;
@@ -706,36 +754,13 @@ export default class SnipdPlugin extends Plugin {
 
       let exportResponse;
       try {
-        const exportRequestBody: {
-          episode_ids: string[];
-          episode_template: string;
-          snip_template: string;
-          additional_properties?: Array<{ name: string; template: string; displayName?: string; }>;
-          only_edited_snips?: boolean;
-        } = {
-          episode_ids: episodeIds,
-          episode_template: this.settings.episodeTemplate ?? DEFAULT_EPISODE_TEMPLATE,
-          snip_template: this.settings.snipTemplate ?? DEFAULT_SNIP_TEMPLATE,
-        };
-        
-        const additionalProps = this.settings.additionalProperties;
-        if (isValidAdditionalProperties(additionalProps)) {
-          exportRequestBody.additional_properties = additionalProps.map((prop) => ({
-            name: prop.name.trim(),
-            template: prop.template.trim(),
-            ...(prop.displayName?.trim() ? { displayName: prop.displayName.trim() } : {}),
-          }));
-        }
-        
-        if (this.settings.onlyEditedSnips) {
-          exportRequestBody.only_edited_snips = true;
-        }
-        
+        const exportRequestBody = this.buildExportRequestBody(episodeIds, null);
+
         exportResponse = await requestUrl({
           url: `${API_BASE_URL}/obsidian/export-episode-snips`,
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${this.settings.apiKey}`,
+            'Authorization': this.formatAuthorizationToken(this.settings.apiKey),
             'Content-Type': 'application/json',
           },
           body: JSON.stringify(exportRequestBody),
@@ -747,7 +772,7 @@ export default class SnipdPlugin extends Plugin {
         this.settings.isTestSyncing = false;
         await this.saveSettings();
         if (this.settingsTab) {
-          this.settingsTab.display();
+          this.settingsTab.refresh();
         }
         this.notice(errorMsg, true, 4, true);
         this.clearStatusBarPersistentMessage();
@@ -771,7 +796,7 @@ export default class SnipdPlugin extends Plugin {
         this.settings.snipdDir = testDir;
         
         await this.fetchAndSaveBaseFileForTest(testDir);
-        
+
         const stats = await this.processZipExport(blob);
         
         
@@ -785,10 +810,10 @@ export default class SnipdPlugin extends Plugin {
         await this.saveSettings();
         
         if (this.settingsTab) {
-          this.settingsTab.display();
+          this.settingsTab.refresh();
         }
         
-        this.setStatusBarPersistentMessage(`Test sync completed (${stats.episodeCount} episodes, ${stats.snipCount} snips)`);
+        this.setStatusBarPersistentMessage(`Test sync completed (${formatSyncCounts(stats.episodeCount, stats.snipCount) || 'no data'})`);
         this.clearStatusBarPersistentMessageAfterDelay(3000);
       } else {
         debugLog("Snipd plugin: bad response for test export: ", exportResponse);
@@ -796,7 +821,7 @@ export default class SnipdPlugin extends Plugin {
         this.settings.isTestSyncing = false;
         await this.saveSettings();
         if (this.settingsTab) {
-          this.settingsTab.display();
+          this.settingsTab.refresh();
         }
         this.notice(errorMsg, true, 4, true);
         this.clearStatusBarPersistentMessage();
@@ -807,14 +832,14 @@ export default class SnipdPlugin extends Plugin {
       this.settings.isTestSyncing = false;
       await this.saveSettings();
       if (this.settingsTab) {
-        this.settingsTab.display();
+        this.settingsTab.refresh();
       }
       this.notice(errorMsg, true, 4, true);
       this.clearStatusBarPersistentMessage();
     }
   }
 
-  async processZipExport(blob: Blob): Promise<{ episodeCount: number; snipCount: number }> {
+  async processZipExport(blob: Blob): Promise<SyncStats> {
     this.fs = this.app.vault.adapter;
 
     const blobReader = new zip.BlobReader(blob);
@@ -874,6 +899,7 @@ export default class SnipdPlugin extends Plugin {
       if (!episodeData) {
         debugLog(`Snipd plugin: No metadata found for episode ${episodeId}`);
       }
+
       const episodeName = generateEpisodeFileName(episodeData, episodeId, this.settings);
       const showId = episodeData?.show_id;
       const showName = showId && showsData[showId] ? showsData[showId].name : 'Unknown Show';
@@ -883,14 +909,16 @@ export default class SnipdPlugin extends Plugin {
         fileData.append,
         sanitizeFileName(episodeName),
         sanitizeFileName(showName),
-        episodeData?.total_snip_count
+        episodeData?.total_snip_count,
       );
-      
+
       if (episodeData?.updated_snip_count) {
         snipCount += episodeData.updated_snip_count;
         episodeCount++;
       }
     }
+
+    debugLog(`Snipd plugin: batch processed - ${episodeFiles.size} episodes in zip, ${episodeCount} with updated snips, ${snipCount} snips`);
 
     return { episodeCount, snipCount };
   }
@@ -917,44 +945,51 @@ export default class SnipdPlugin extends Plugin {
     return `---\n${updatedFrontmatter}\n---\n${restOfContent}`;
   }
 
+  /** Both write paths keep a transcript section the note already has. */
   async syncFile(
     fullContent: string,
     appendContent: string | undefined,
     entityName: string,
     showName: string,
-    totalSnipCount?: number
-  ) {
+    totalSnipCount?: number,
+  ): Promise<void> {
     const targetPath = normalizePath(`${this.settings.snipdDir}/Data/${showName}/${entityName}.md`);
 
     await createDirForFile(targetPath, this.fs);
 
     let contentToWrite: string;
     const isAppendOnlyFile = this.settings.appendOnlyFiles[targetPath];
+    const targetExists = await this.fs.exists(targetPath);
 
-    if (await this.fs.exists(targetPath)) {
+    if (targetExists) {
       const existingContent = await this.fs.read(targetPath);
       const existingHash = Md5.hashStr(existingContent).toString();
       const storedHash = this.settings.fileHashMap[targetPath];
 
-      if (existingHash === storedHash && !isAppendOnlyFile) {
-        contentToWrite = fullContent;
-      } else {
+      if (fullContent && existingHash === storedHash && !isAppendOnlyFile) {
+        contentToWrite = preserveExistingTranscript(fullContent, existingContent);
+        debugLog(`Snipd plugin: syncFile full-rewrite path for ${entityName}`);
+      } else if (appendContent) {
         if (!isAppendOnlyFile) {
           this.settings.appendOnlyFiles[targetPath] = true;
         }
-        
-        if (appendContent) {
-          contentToWrite = existingContent.trimEnd() + "\n" + appendContent;
-          
-          if (totalSnipCount !== undefined) {
-            contentToWrite = this.updateSnipsCountInFrontmatter(contentToWrite, totalSnipCount);
-          }
-        } else {
-          contentToWrite = fullContent;
-        }
+        const merged = spliceBeforeTranscriptHeader(existingContent, appendContent);
+        contentToWrite = totalSnipCount !== undefined
+          ? this.updateSnipsCountInFrontmatter(merged, totalSnipCount)
+          : merged;
+        debugLog(`Snipd plugin: syncFile append path for ${entityName}`);
+      } else if (fullContent) {
+        contentToWrite = preserveExistingTranscript(fullContent, existingContent);
+        debugLog(`Snipd plugin: syncFile full-rewrite fallback for ${entityName} (hashMismatch=${existingHash !== storedHash}, isAppendOnly=${!!isAppendOnlyFile})`);
+      } else {
+        debugLog(`Snipd plugin: syncFile nothing to write for ${entityName}`);
+        return;
       }
-    } else {
+    } else if (fullContent) {
       contentToWrite = fullContent;
+      debugLog(`Snipd plugin: syncFile new-file path for ${entityName}`);
+    } else {
+      return;
     }
 
     await this.fs.write(targetPath, contentToWrite);
@@ -1009,7 +1044,7 @@ export default class SnipdPlugin extends Plugin {
         url: `${API_BASE_URL}/obsidian/export-base-file`,
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${this.settings.apiKey}`,
+          'Authorization': this.formatAuthorizationToken(this.settings.apiKey),
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({}),
@@ -1157,7 +1192,7 @@ export default class SnipdPlugin extends Plugin {
         url: `${API_BASE_URL}/obsidian/export-base-file`,
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${this.settings.apiKey}`,
+          'Authorization': this.formatAuthorizationToken(this.settings.apiKey),
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({}),
@@ -1365,8 +1400,11 @@ export default class SnipdPlugin extends Plugin {
   }
 
   async loadSettings() {
-    const loadedData = await this.loadData() as Partial<SnipdPluginSettings>;
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, loadedData);
+    const loadedData = await this.loadData() as Partial<SnipdPluginSettings> | null;
+    // A saved key without a default is a setting that is no longer used; dropping it keeps it
+    // from being written back on every save.
+    const knownData = Object.fromEntries(Object.entries(loadedData ?? {}).filter(([key]) => key in DEFAULT_SETTINGS));
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, knownData);
     
     if (this.settings.encryptedApiKey) {
       try {
@@ -1374,6 +1412,9 @@ export default class SnipdPlugin extends Plugin {
           this.settings.encryptedApiKey,
           this.getVaultIdentifier()
         );
+        if (this.settings.apiKey) {
+          this.encryptedApiKeySource = `${this.getVaultIdentifier()}\n${this.settings.apiKey}`;
+        }
       } catch (error) {
         debugLog('Snipd plugin: Failed to decrypt API key:', error);
         this.settings.apiKey = '';
@@ -1392,17 +1433,20 @@ export default class SnipdPlugin extends Plugin {
   }
 
   async saveSettings() {
-    if (this.settings.apiKey) {
+    const source = `${this.getVaultIdentifier()}\n${this.settings.apiKey}`;
+    if (this.settings.apiKey && source !== this.encryptedApiKeySource) {
       try {
         this.settings.encryptedApiKey = await SecureStorage.encryptApiKey(
           this.settings.apiKey,
           this.getVaultIdentifier()
         );
+        this.encryptedApiKeySource = source;
       } catch (error) {
         debugLog('Snipd plugin: Failed to encrypt API key:', error);
       }
     }
-    
+
+
     await this.persistSettings();
   }
 }

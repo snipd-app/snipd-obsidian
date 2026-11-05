@@ -20,6 +20,14 @@ Lets you automatically sync all your podcast highlights (=snips) to your Obsidia
   - Metadata as properties
   - Two default Bases views out of the box
 
+## Account, network use and privacy
+
+- **Snipd account:** the plugin needs a Snipd account. "Connect" opens `app.snipd.com` in your browser to sign in.
+- **Network use:** the plugin connects only to the Snipd API (`api.snipd.com`), to link your account and to download your snips, episode details and the default Bases views. Requests carry the plugin's API key and your formatting templates, which the server applies.
+- **Content in your notes:** synced notes link to `share.snipd.com` and show episode artwork from where it is hosted. The default snip template embeds Snipd's audio player from `share.snipd.com`, which loads when you open a note; remove `{{snip_audio_player}}` from the snip template to leave it out.
+- **Files:** the plugin reads and writes only inside your vault.
+- **Privacy:** the plugin itself collects no analytics. Snipd's servers record sync requests as described in the [Snipd privacy policy](https://www.snipd.com/privacy-policy).
+
 ## About Snipd
 [Snipd](https://www.snipd.com) is an AI-powered podcast app that let's you highlight and take notes from podcasts just by tapping your headphones.  
 
@@ -46,6 +54,12 @@ Inside the plugin's settings, go to "Custom formatting" and click "Configure":
 - **Episode filename template**: Customize how episode files are named
 - **Episode template**: Control how episode files are formatted
 - **Snip template**: Control how individual snips appear
+
+## Pre-submission checks
+
+Run `npm ci` followed by `npm run check` before tagging a release. This builds the plugin, runs Obsidian's official source and CSS lint rules, and checks that the version and release files are ready. For a specific tag, run `npm run check:release -- 1.3.3` after building.
+
+The Obsidian Community directory also offers **Review branch** on the plugin's management page. It previews the full hosted scan against a branch or commit before a release is published.
 
 ## Support & Feedback
 

@@ -39,7 +39,7 @@ export class FormattingConfigModal extends Modal {
     this.tempEpisodeTemplate = plugin.settings.episodeTemplate ?? DEFAULT_EPISODE_TEMPLATE;
     this.tempSnipTemplate = plugin.settings.snipTemplate ?? DEFAULT_SNIP_TEMPLATE;
     this.tempEpisodeFileNameTemplate = plugin.settings.episodeFileNameTemplate ?? DEFAULT_EPISODE_FILE_NAME_TEMPLATE;
-    const savedProps: Array<{ name: string; template: string; displayName?: string; }> | null = plugin.settings.additionalProperties as Array<{ name: string; template: string; displayName?: string; }> | null;
+    const savedProps = plugin.settings.additionalProperties;
     if (savedProps !== null && savedProps !== undefined && Array.isArray(savedProps)) {
       this.tempAdditionalProperties = savedProps.map((p) => ({ name: p.name, template: p.template, displayName: p.displayName ?? '' }));
     } else {

@@ -57,3 +57,10 @@ export async function createDirForFile(filePath: string, fs: DataAdapter): Promi
     await fs.mkdir(dirPath);
   }
 }
+
+export function formatSyncCounts(episodeCount: number, snipCount: number): string {
+  if (episodeCount > 0 || snipCount > 0) {
+    return `${episodeCount} episodes, ${snipCount} snips`;
+  }
+  return '';
+}
