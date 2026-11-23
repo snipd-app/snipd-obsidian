@@ -308,3 +308,16 @@ button.snipd-reset-button {
   font-size: 12px;
   font-weight: 600;
 }
+
+.snipd-pairing-hint {
+  font-size: 0.9em;
+  color: var(--text-muted);
+}
+
+.snipd-pairing-code {
+  margin-top: 0.25rem;
+  font-family: var(--font-monospace);
+  font-size: 1.4em;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}

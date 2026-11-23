@@ -5,6 +5,16 @@ import { FormattingConfigModal } from './formatting_modal';
 import { DEFAULT_SETTINGS } from './types';
 import { isDev, debugLog, formatSyncCounts } from './utils';
 import { API_BASE_URL, AUTH_URL } from './main';
+import { pairingCode, randomUUIDv4 } from './pairing_code';
+
+// How long to wait for the user to confirm on app.snipd.com. A binding made there
+// stays valid for 5 minutes.
+const CONNECT_TIMEOUT_MS = 5 * 60 * 1000;
+const MIN_WAIT_INTERVAL_MS = 5 * 1000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
 
 export class SnipdSettingModal extends PluginSettingTab {
   plugin: SnipdPlugin;
@@ -23,14 +33,6 @@ export class SnipdSettingModal extends PluginSettingTab {
     this.plugin.settingsTab = null;
   }
 
-  generateUUIDv4(): string {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-      const r = Math.random() * 16 | 0;
-      const v = c === 'x' ? r : (r & 0x3 | 0x8);
-      return v.toString(16);
-    });
-  }
-
   // Cannot use electron API in Obsidian
   openExternal(url: string) {
     activeWindow.open(url);
@@ -38,37 +40,62 @@ export class SnipdSettingModal extends PluginSettingTab {
 
   async connectToSnipd(button: HTMLElement, container: HTMLElement, uuid?: string): Promise<void> {
     if (!uuid) {
-      uuid = this.generateUUIDv4();
+      uuid = randomUUIDv4();
     }
 
-    container.empty();
-    container.addClass('snipd-hidden');
+    const fail = (message: string) => {
+      button.textContent = 'Connect';
+      button.removeAttribute('disabled');
+      this.showInfoStatus(container, message, "snipd-error");
+    };
+
+    let code: string;
+    try {
+      code = await pairingCode(uuid);
+    } catch (e) {
+      debugLog("Snipd plugin: could not compute the pairing code: ", e);
+      fail("Connection failed. Try again");
+      return;
+    }
+
+    // Shown before the browser opens, so the code is there to compare with the
+    // one the Snipd page shows next to its Connect button.
+    this.showPairingCode(container, code);
     this.openExternal(`${AUTH_URL}?uuid=${uuid}`);
 
-    let response;
-    let data: { token?: string };
+    // The server answers one wait after a minute at most (404 when nothing was
+    // bound yet). Signing in and confirming in the browser can take longer, so
+    // wait again until CONNECT_TIMEOUT_MS has passed.
+    const deadline = Date.now() + CONNECT_TIMEOUT_MS;
+    let data: { token?: string } | null = null;
+    while (data == null) {
+      const startedAt = Date.now();
+      let response;
+      try {
+        response = await requestUrl({
+          url: `${API_BASE_URL}/obsidian/auth?uuid=${uuid}`,
+          method: 'GET',
+          throw: false,
+        });
+      } catch (e) {
+        debugLog("Snipd plugin: request failed in connectToSnipd: ", e);
+        fail("Connection failed. Try again");
+        return;
+      }
 
-    try {
-      response = await requestUrl({
-        url: `${API_BASE_URL}/obsidian/auth?uuid=${uuid}`,
-        method: 'GET',
-      });
-    } catch (e) {
-      debugLog("Snipd plugin: request failed in connectToSnipd: ", e);
-      button.textContent = 'Connect';
-      button.removeAttribute('disabled');
-      this.showInfoStatus(container, "Connection failed. Try again", "snipd-error");
-      return;
-    }
-
-    if (response && response.status >= 200 && response.status < 300) {
-      data = response.json as { token?: string };
-    } else {
-      debugLog("Snipd plugin: bad response in connectToSnipd: ", response);
-      button.textContent = 'Connect';
-      button.removeAttribute('disabled');
-      this.showInfoStatus(container, "Connection failed. Try again", "snipd-error");
-      return;
+      if (response.status >= 200 && response.status < 300) {
+        data = response.json as { token?: string };
+      } else if (response.status === 404 && Date.now() < deadline) {
+        // Don't hammer the endpoint if it answers early.
+        const elapsed = Date.now() - startedAt;
+        if (elapsed < MIN_WAIT_INTERVAL_MS) {
+          await sleep(MIN_WAIT_INTERVAL_MS - elapsed);
+        }
+      } else {
+        debugLog("Snipd plugin: bad response in connectToSnipd: ", response.status);
+        fail(response.status === 404 ? "Not confirmed in time. Try again" : "Connection failed. Try again");
+        return;
+      }
     }
 
     if (data.token) {
@@ -79,10 +106,18 @@ export class SnipdSettingModal extends PluginSettingTab {
       new Notice("Successfully connected to Snipd");
     } else {
       debugLog("Snipd plugin: didn't get token data");
-      button.textContent = 'Connect';
-      button.removeAttribute('disabled');
-      this.showInfoStatus(container, "Authorization failed. Please try again", "snipd-error");
+      fail("Authorization failed. Please try again");
     }
+  }
+
+  showPairingCode(container: HTMLElement, code: string): void {
+    container.empty();
+    container.removeClass('snipd-hidden');
+    container.createDiv({
+      text: 'Confirm in your browser. The Snipd page should show this code:',
+      cls: 'snipd-pairing-hint',
+    });
+    container.createDiv({ text: code, cls: 'snipd-pairing-code' });
   }
 
   showInfoStatus(container: HTMLElement | null, message: string, cls: string): void {
